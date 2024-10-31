@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "ts-node src/app.ts",
+    "build": "tsc",
+    "dev": "ts-node-dev --respawn --transpile-only src/app.ts"
   },
   "keywords": [],
   "author": "",
@@ -15,5 +18,13 @@
     "ejs": "^3.1.10",
     "express": "^4.21.0",
     "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@types/body-parser": "^1.19.5",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.8.1",
+    "@types/pg": "^8.11.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
   }
 }
