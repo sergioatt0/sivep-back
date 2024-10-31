@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import path from 'path';
-dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, '../.env.development.local') });
 
 import express, { Request, Response } from 'express';
 import { Pool } from 'pg';
