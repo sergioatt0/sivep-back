@@ -2,10 +2,11 @@ import dotenv from 'dotenv';
 import path from 'path';
 dotenv.config({ path: path.resolve(__dirname, '../.env.development.local') });
 
-import express, { Request, Response } from 'express';
+import express, {NextFunction, Request, Response} from 'express';
 import { Pool } from 'pg';
 import bodyParser from 'body-parser';
 
+const cors = require('cors');
 const app = express();
 const port = process.env.PORT;
 
@@ -25,6 +26,7 @@ app.set('views', path.join(__dirname, 'views'));
 // Middleware para manejar datos JSON y formularios
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+app.use(cors());
 
 // Ruta principal para renderizar la vista principal
 app.get('/', (req: Request, res: Response) => {
@@ -80,23 +82,26 @@ app.get('/usuarios-testing', async (req: Request, res: Response) => {
 app.get('/modulo-ventero-resolucion', async (req, res) => {
   try {
     const query = `
-            SELECT 
-                p.nombre1 || ' ' || p.apellido1 AS nombre_completo,
-                p.documento,
-                p.id_tipo_documento,
-                p.correo_electronico,
-                v.asociacion_participa,
-                r.numero AS numero_resolucion,
-                m.serial_propio
-            FROM 
-                sisdep_archivo.persona p
-            LEFT JOIN 
-                sisdep_archivo.ventero v ON p.id = v.id
-            LEFT JOIN 
-                sisdep_regulaciones.resolucion r ON p.id = r.id
-            LEFT JOIN 
-                sisdep_general.modulo m ON p.id = m.id;
-        `;
+      SELECT
+        p.nombre1 || ' ' || p.apellido1 AS nombre_completo,
+        p.id_tipo_documento,
+        p.documento,
+        p.correo_electronico,
+        v.asociacion_participa,
+        v.actividad,
+        v.clase,
+        r.fecha_vencimiento,
+        r.numero AS numero_resolucion,
+        m.serial_propio
+      FROM
+        sisdep_archivo.persona p
+          LEFT JOIN
+        sisdep_archivo.ventero v ON p.id = v.id
+          LEFT JOIN
+        sisdep_regulaciones.resolucion r ON p.id = r.id
+          LEFT JOIN
+        sisdep_general.modulo m ON p.id = m.id;
+    `;
 
     const { rows } = await pool.query(query);
 
@@ -107,6 +112,52 @@ app.get('/modulo-ventero-resolucion', async (req, res) => {
     res.status(500).send('Error en el servidor');
   }
 });
+
+// Definimos un manejador para funciones async
+const asyncHandler = (fn: Function) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    return Promise.resolve(fn(req, res, next)).catch(next);
+  };
+};
+
+// Ahora puedes envolver tu función asíncrona
+app.get('/modulo-ventero-resolucion-final', asyncHandler(async (req: Request, res: Response) => {
+  const { id_tenencia_propiedad } = req.query;
+  console.log("id_tenencia_propiedad", id_tenencia_propiedad);
+  if (!id_tenencia_propiedad) {
+    return res.status(400).json({ message: 'El parámetro id_tenencia_propiedad es requerido' });
+  }
+
+  const query = `
+    SELECT p.nombre1 || ' ' || p.apellido1 AS nombre_completo,
+           p.id_tipo_documento,
+           p.documento,
+           p.correo_electronico,
+           v.asociacion_participa,
+           v.actividad,
+           v.clase,
+           r.fecha_vencimiento,
+           r.numero AS numero_resolucion,
+           m.serial_propio
+    FROM sisdep_archivo.persona p
+           LEFT JOIN
+         sisdep_archivo.ventero v ON p.id = v.id
+           LEFT JOIN
+         sisdep_regulaciones.resolucion r ON p.id = r.id
+           LEFT JOIN
+         sisdep_general.modulo m ON p.id = m.id
+    WHERE p.documento = $1;
+  `;
+
+  const { rows } = await pool.query(query, [id_tenencia_propiedad]);
+
+  if (rows.length > 0) {
+    res.json(rows[0]); // Retorna solo el primer resultado
+  } else {
+    res.status(404).json({ message: 'No se encontró información del módulo' });
+  }
+}));
+
 
 // Cerrar la conexión con la base de datos al salir
 process.on('exit', () => {
