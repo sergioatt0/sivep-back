@@ -132,6 +132,7 @@ app.get('/modulo-ventero-resolucion-final', asyncHandler(async (req: Request, re
     SELECT p.nombre1 || ' ' || p.apellido1 AS nombre_completo,
            p.id_tipo_documento,
            p.documento,
+           p.foto_ventero,
            p.correo_electronico,
            v.asociacion_participa,
            v.actividad,
