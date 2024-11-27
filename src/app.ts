@@ -1,23 +1,56 @@
 import dotenv from 'dotenv';
 import path from 'path';
-dotenv.config({ path: path.resolve(__dirname, '../.env.development.local') });
-
+import https from 'https';
+import fs from 'fs';
 import express, {NextFunction, Request, Response} from 'express';
 import { Pool } from 'pg';
 import bodyParser from 'body-parser';
+
+// Esto asegura de no sobrescribir NODE_ENV si ya está definido
+if (!process.env.NODE_ENV) {
+  console.warn("NODE_ENV no está definido. Se usará 'development' como valor predeterminado.");
+  process.env.NODE_ENV = 'development';
+}
+// Configurar dotenv según el entorno
+if (process.env.NODE_ENV === 'development') {
+  dotenv.config({ path: path.resolve(__dirname, '../.env.development.local') });
+  console.log("Entorno de desarrollo configurado.");
+} else if (process.env.NODE_ENV === 'production') {
+  dotenv.config({ path: path.resolve(__dirname, '../.env') });
+  console.log("Entorno de producción configurado.");
+} else {
+  console.warn("Entorno desconocido. No se cargaron configuraciones específicas.");
+}
 
 const cors = require('cors');
 const app = express();
 const port = process.env.PORT;
 
-// Configurar la conexión a PostgreSQL
+// Configurar la conexión a PostgreSQL local y en AWS
+const isUsingAws = process.env.USE_AWS_DB === 'true';
+
+const dbSslCertPath = path.resolve(__dirname, '../certs/us-east-1-bundle.pem');
+
 const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  password: process.env.DB_PASSWORD,
-  port: Number(process.env.DB_PORT)
+  user: isUsingAws ? process.env.AWS_DB_USER : process.env.DB_USER,
+  host: isUsingAws ? process.env.AWS_DB_HOST : process.env.DB_HOST,
+  database: isUsingAws ? process.env.AWS_DB_NAME : process.env.DB_NAME,
+  password: isUsingAws ? process.env.AWS_DB_PASSWORD : process.env.DB_PASSWORD,
+  port: Number(isUsingAws ? process.env.AWS_DB_PORT : process.env.DB_PORT),
+  ssl: isUsingAws
+      ? {
+        rejectUnauthorized: false, // Esto es necesario si el certificado no está instalado en tu máquina local
+        ca: fs.readFileSync(dbSslCertPath).toString(), // Usamos la ruta construida aquí
+      }
+      : undefined, // Si no estás usando AWS, no necesitas SSL
 });
+
+console.log('isUsingAws', isUsingAws);
+console.log('Database Configuration:');
+console.log('Host:', isUsingAws ? process.env.AWS_DB_HOST : process.env.DB_HOST);
+console.log('User:', isUsingAws ? process.env.AWS_DB_USER : process.env.DB_USER);
+console.log('Database:', isUsingAws ? process.env.AWS_DB_NAME : process.env.DB_NAME);
+console.log('Port:', isUsingAws ? process.env.AWS_DB_PORT : process.env.DB_PORT);
 
 // Configurar el motor de vistas EJS
 app.set('view engine', 'ejs');
@@ -159,13 +192,26 @@ app.get('/modulo-ventero-resolucion-final', asyncHandler(async (req: Request, re
   }
 }));
 
+const sslKeyPath = process.env.SSL_KEY_PATH;
+const sslCertPath = process.env.SSL_CERT_PATH;
+
+// Ruta para gestionar el certificado SSL
+const sslOptions = {
+  key: fs.readFileSync(sslKeyPath!),
+  cert: fs.readFileSync(sslCertPath!),
+};
+
+// Iniciar el servidor HTTPS
+https.createServer(sslOptions, app).listen(port, () => {
+  console.log(`Server running on https://localhost:${port}`);
+});
 
 // Cerrar la conexión con la base de datos al salir
 process.on('exit', () => {
   pool.end();
 });
 
-// Iniciar el servidor
+/*// Iniciar el servidor
 app.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);
-});
+});*/
