@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import path from 'path';
 import https from 'https';
+import http from 'http';
 import fs from 'fs';
 import express, {NextFunction, Request, Response} from 'express';
 import { Pool } from 'pg';
@@ -11,12 +12,13 @@ if (!process.env.NODE_ENV) {
   console.warn("NODE_ENV no está definido. Se usará 'development' como valor predeterminado.");
   process.env.NODE_ENV = 'development';
 }
+
 // Configurar dotenv según el entorno
 if (process.env.NODE_ENV === 'development') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.development.local') });
   console.log("Entorno de desarrollo configurado.");
 } else if (process.env.NODE_ENV === 'production') {
-  dotenv.config({ path: path.resolve(__dirname, '../.env') });
+  // No cargar .env en producción, ya que AWS se encarga de las variables de entorno
   console.log("Entorno de producción configurado.");
 } else {
   console.warn("Entorno desconocido. No se cargaron configuraciones específicas.");
@@ -24,7 +26,10 @@ if (process.env.NODE_ENV === 'development') {
 
 const cors = require('cors');
 const app = express();
-const port = process.env.PORT;
+
+// Detectar el entorno (producción o desarrollo)
+const isProduction = process.env.NODE_ENV === 'production';
+const port = isProduction ? Number(process.env.PORT) || 8080 : 5000;
 
 // Configurar la conexión a PostgreSQL local y en AWS
 const isUsingAws = process.env.USE_AWS_DB === 'true';
@@ -44,13 +49,6 @@ const pool = new Pool({
       }
       : undefined, // Si no estás usando AWS, no necesitas SSL
 });
-
-console.log('isUsingAws', isUsingAws);
-console.log('Database Configuration:');
-console.log('Host:', isUsingAws ? process.env.AWS_DB_HOST : process.env.DB_HOST);
-console.log('User:', isUsingAws ? process.env.AWS_DB_USER : process.env.DB_USER);
-console.log('Database:', isUsingAws ? process.env.AWS_DB_NAME : process.env.DB_NAME);
-console.log('Port:', isUsingAws ? process.env.AWS_DB_PORT : process.env.DB_PORT);
 
 // Configurar el motor de vistas EJS
 app.set('view engine', 'ejs');
@@ -192,26 +190,31 @@ app.get('/modulo-ventero-resolucion-final', asyncHandler(async (req: Request, re
   }
 }));
 
-const sslKeyPath = process.env.SSL_KEY_PATH;
-const sslCertPath = process.env.SSL_CERT_PATH;
+// Lógica para manejar la configuración DEL certificado SSL dependiendo del entorno
+if (process.env.NODE_ENV === 'development') {
 
-// Ruta para gestionar el certificado SSL
-const sslOptions = {
-  key: fs.readFileSync(sslKeyPath!),
-  cert: fs.readFileSync(sslCertPath!),
-};
+  // Solo en desarrollo usamos HTTPS
+  const sslKeyPath = process.env.SSL_KEY_PATH;
+  const sslCertPath = process.env.SSL_CERT_PATH;
 
-// Iniciar el servidor HTTPS
-https.createServer(sslOptions, app).listen(port, () => {
-  console.log(`Server running on https://localhost:${port}`);
-});
+  const httpsOptions = {
+    key: fs.readFileSync(sslKeyPath!),
+    cert: fs.readFileSync(sslCertPath!),
+  };
+
+  // Usar HTTPS en desarrollo
+  https.createServer(httpsOptions, app).listen(port, () => {
+    console.log(`Servidor HTTPS corriendo en el puerto ${port} (desarrollo)`);
+  });
+
+} else {
+  // En producción, usaremos HTTP (gestión de HTTPS se realiza por el proxy inverso)
+  http.createServer(app).listen(port, '0.0.0.0', () => {
+    console.log(`Servidor HTTP corriendo en el puerto ${port} (producción)`);
+  });
+}
 
 // Cerrar la conexión con la base de datos al salir
 process.on('exit', () => {
   pool.end();
 });
-
-/*// Iniciar el servidor
-app.listen(port, () => {
-  console.log(`Server running on http://localhost:${port}`);
-});*/
