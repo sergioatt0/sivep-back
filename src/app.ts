@@ -5,20 +5,19 @@ import http from 'http';
 import fs from 'fs';
 import express, {NextFunction, Request, Response} from 'express';
 import { Pool } from 'pg';
-import bodyParser from 'body-parser';
 
-// Esto asegura de no sobrescribir NODE_ENV si ya está definido
+// This ensures that we do not overwrite NODE_ENV if it is already defined
 if (!process.env.NODE_ENV) {
   console.warn("NODE_ENV no está definido. Se usará 'development' como valor predeterminado.");
   process.env.NODE_ENV = 'development';
 }
 
-// Configurar dotenv según el entorno
+// Configure dotenv according to the environment
 if (process.env.NODE_ENV === 'development') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.development.local') });
   console.log("Entorno de desarrollo configurado.");
 } else if (process.env.NODE_ENV === 'production') {
-  // No cargar .env en producción, ya que AWS se encarga de las variables de entorno
+  // .env is not loaded in production, since AWS takes care of the environment variables
   console.log("Entorno de producción configurado.");
 } else {
   console.warn("Entorno desconocido. No se cargaron configuraciones específicas.");
@@ -27,13 +26,15 @@ if (process.env.NODE_ENV === 'development') {
 const cors = require('cors');
 const app = express();
 
-// Detectar el entorno (producción o desarrollo)
+// Detect the environment (production or development)
 const isProduction = process.env.NODE_ENV === 'production';
 const port = isProduction ? Number(process.env.PORT) || 8080 : 5000;
 
-// Configurar la conexión a PostgreSQL local y en AWS
+// Configure the connection to PostgreSQL locally and on AWS
 const isUsingAws = process.env.USE_AWS_DB === 'true';
 
+// Connections to AWS RDS PostgreSQL require SSL to comply with security best practices
+// In development, we use the local certificate
 const dbSslCertPath = path.resolve(__dirname, '../certs/us-east-1-bundle.pem');
 
 const pool = new Pool({
@@ -43,34 +44,36 @@ const pool = new Pool({
   password: isUsingAws ? process.env.AWS_DB_PASSWORD : process.env.DB_PASSWORD,
   port: Number(isUsingAws ? process.env.AWS_DB_PORT : process.env.DB_PORT),
   ssl: isUsingAws
-      ? {
-        rejectUnauthorized: false, // Esto es necesario si el certificado no está instalado en tu máquina local
-        ca: fs.readFileSync(dbSslCertPath).toString(), // Usamos la ruta construida aquí
-      }
-      : undefined, // Si no estás usando AWS, no necesitas SSL
+      ? process.env.NODE_ENV === 'production'
+          ? { rejectUnauthorized: false } // In production, we use AWS SSL without the local file
+          : {
+            rejectUnauthorized: false,
+            ca: fs.readFileSync(dbSslCertPath).toString(), // In development, we use the local certificate
+          }
+      : undefined, // If you are not using AWS, you do not need SSL
 });
 
-// Configurar el motor de vistas EJS
+// Configure the EJS view engine
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
-// Middleware para manejar datos JSON y formularios
+// Middleware for handling JSON data and forms
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(cors());
 
-// Ruta principal para renderizar la vista principal
+// Main path to render the main view
 app.get('/', (req: Request, res: Response) => {
-  res.render('index'); // Renderiza el archivo index.ejs en la carpeta views
+  res.render('index'); // Render the index.ejs file in the views folder
 });
 
-// Ruta POST para manejar envíos de formularios
+// POST route to handle form submissions
 app.post('/submit', (req: Request, res: Response) => {
   const { name } = req.body;
-  res.send(`Hello, ${name}, we were waiting for you!`);
+  res.send(`Hello, ${name}, we are testing submit button!`);
 });
 
-// Ruta GET para devolver una respuesta API simple
+// GET route to return a simple API response
 app.get('/api/data', (req: Request, res: Response) => {
   const data = {
     message: 'Hello from the API!',
@@ -80,13 +83,13 @@ app.get('/api/data', (req: Request, res: Response) => {
   res.json(data);
 });
 
-// Ruta POST para la API
+// POST route for the API
 app.post('/api/submit', (req: Request, res: Response) => {
   const { info } = req.body;
   res.json({ message: `Received ${info}`, status: 'success' });
 });
 
-// Ruta GET para probar la conexión con la base de datos
+// GET route to test the connection to the database
 app.get('/db-test', async (req: Request, res: Response) => {
   try {
     const result = await pool.query('SELECT NOW()');
@@ -97,20 +100,26 @@ app.get('/db-test', async (req: Request, res: Response) => {
   }
 });
 
-// Ruta GET para obtener información básica de la base de datos
+// GET route to obtain basic information from the database
 app.get('/usuarios-testing', async (req: Request, res: Response) => {
   try {
-    const result = await pool.query('SELECT * FROM public.usuarios');
-    res.json(result.rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send('Error connecting to the database');
+    const query = `
+      SELECT *
+      FROM sisdep_archivo.persona;
+    `;
+
+    const { rows } = await pool.query(query);
+
+    // Returns the response with the data
+    res.json(rows);
+  } catch (error) {
+    console.error('Error ejecutando la consulta', error);
+    res.status(500).send('Error en el servidor');
   }
 });
 
-// Función para obtener datos de Venteros
-
-app.get('/modulo-ventero-resolucion', async (req, res) => {
+// Function to obtain data from Venteros
+app.get('/modulo-ventero-resolucion', async (req: Request, res: Response) => {
   try {
     const query = `
       SELECT
@@ -136,7 +145,7 @@ app.get('/modulo-ventero-resolucion', async (req, res) => {
 
     const { rows } = await pool.query(query);
 
-    // Devuelve la respuesta con los datos
+    // Returns the response with the data
     res.json(rows);
   } catch (error) {
     console.error('Error ejecutando la consulta', error);
@@ -144,17 +153,19 @@ app.get('/modulo-ventero-resolucion', async (req, res) => {
   }
 });
 
-// Definimos un manejador para funciones async
+// We define a handler for async functions
 const asyncHandler = (fn: Function) => {
   return (req: Request, res: Response, next: NextFunction) => {
     return Promise.resolve(fn(req, res, next)).catch(next);
   };
 };
 
-// Ahora puedes envolver tu función asíncrona
+// Wrapping asynchronous function
 app.get('/modulo-ventero-resolucion-final', asyncHandler(async (req: Request, res: Response) => {
   const { id_tenencia_propiedad } = req.query;
+
   console.log("id_tenencia_propiedad", id_tenencia_propiedad);
+
   if (!id_tenencia_propiedad) {
     return res.status(400).json({ message: 'El parámetro id_tenencia_propiedad es requerido' });
   }
@@ -184,16 +195,16 @@ app.get('/modulo-ventero-resolucion-final', asyncHandler(async (req: Request, re
   const { rows } = await pool.query(query, [id_tenencia_propiedad]);
 
   if (rows.length > 0) {
-    res.json(rows[0]); // Retorna solo el primer resultado
+    res.json(rows[0]); // Returns only the first result
   } else {
     res.status(404).json({ message: 'No se encontró información del módulo' });
   }
 }));
 
-// Lógica para manejar la configuración DEL certificado SSL dependiendo del entorno
+// Logic to handle SSL certificate configuration depending on the environment
 if (process.env.NODE_ENV === 'development') {
 
-  // Solo en desarrollo usamos HTTPS
+  // Only in development we use HTTPS
   const sslKeyPath = process.env.SSL_KEY_PATH;
   const sslCertPath = process.env.SSL_CERT_PATH;
 
@@ -202,15 +213,15 @@ if (process.env.NODE_ENV === 'development') {
     cert: fs.readFileSync(sslCertPath!),
   };
 
-  // Usar HTTPS en desarrollo
+  // Using HTTPS in development
   https.createServer(httpsOptions, app).listen(port, () => {
-    console.log(`Servidor HTTPS corriendo en el puerto ${port} (desarrollo)`);
+    console.log(`Servidor HTTPS corriendo en el puerto ${port} (de desarrollo)`);
   });
 
 } else {
-  // En producción, usaremos HTTP (gestión de HTTPS se realiza por el proxy inverso)
+// In production, we will use HTTP (HTTPS management is done by the reverse proxy)
   http.createServer(app).listen(port, '0.0.0.0', () => {
-    console.log(`Servidor HTTP corriendo en el puerto ${port} (producción)`);
+    console.log(`Servidor HTTP corriendo en el puerto ${port} (de producción)`);
   });
 }
 
