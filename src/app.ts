@@ -53,40 +53,81 @@ const pool = new Pool({
       : undefined, // If you are not using AWS, you do not need SSL
 });
 
-// Configure the EJS view engine
-app.set('view engine', 'ejs');
-app.set('views', path.join(__dirname, 'views'));
-
 // Middleware for handling JSON data and forms
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
-app.use(cors());
 
-// Main path to render the main view
+// Conditional CORS configuration; app.use(cors());
+/*
+const allowedOrigins = process.env.NODE_ENV === "production"
+    ? ["https://sivep.com", "https://pwa.sivep.com"] // Production domains
+    : ["http://localhost:3000", "https://localhost:3000"]; // Development domains
+*/
+
+// This line is similar to the above code
+const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [];
+
+// CORS configuration options
+const corsOptions = {
+  origin: (origin: string | undefined, callback: (err: Error | null, allow: boolean) => void) => {
+
+    // Allow requests from allowed or no origins (eg. Postman)
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Origen no permitido por CORS"), false);  // Rechazar la solicitud
+    }
+  },
+  methods: ["GET", "POST", "OPTIONS"],  // Allowed HTTP methods
+  allowedHeaders: ["Content-Type"],     // Allowed HTTP headers
+};
+
+app.use(cors(corsOptions));
+
+// Routes
 app.get('/', (req: Request, res: Response) => {
-  res.render('index'); // Render the index.ejs file in the views folder
+  res.json({
+    message: 'API SIVEP funcionando correctamente',
+    status: 'success',
+    endpoints: [
+      {
+        method: "GET",
+        path: "/",
+        description: "Información sobre los endpoints disponibles en la API."
+      },
+      {
+        method: "POST",
+        path: "/submit",
+        description: "Recibe datos de un formulario y responde con un mensaje de prueba."
+      },
+      {
+        method: "GET",
+        path: "/db-test",
+        description: "Prueba la conexión con la base de datos PostgreSQL y devuelve la hora actual del servidor."
+      },
+      {
+        method: "GET",
+        path: "/usuarios-testing",
+        description: "Devuelve todos los registros de la tabla 'sisdep_archivo.persona'."
+      },
+      {
+        method: "GET",
+        path: "/modulo-ventero-resolucion",
+        description: "Devuelve información combinada de las tablas 'persona', 'ventero', 'resolucion' y 'modulo'."
+      },
+      {
+        method: "GET",
+        path: "/modulo-ventero-resolucion-final?id_tenencia_propiedad=",
+        description: "Devuelve información filtrada por el parámetro 'id_tenencia_propiedad'."
+      }
+    ]
+  });
 });
 
 // POST route to handle form submissions
 app.post('/submit', (req: Request, res: Response) => {
   const { name } = req.body;
   res.send(`Hello, ${name}, we are testing submit button!`);
-});
-
-// GET route to return a simple API response
-app.get('/api/data', (req: Request, res: Response) => {
-  const data = {
-    message: 'Hello from the API!',
-    status: 'success',
-    value: 'testing value'
-  };
-  res.json(data);
-});
-
-// POST route for the API
-app.post('/api/submit', (req: Request, res: Response) => {
-  const { info } = req.body;
-  res.json({ message: `Received ${info}`, status: 'success' });
 });
 
 // GET route to test the connection to the database
