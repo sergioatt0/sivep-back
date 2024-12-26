@@ -75,7 +75,7 @@ const corsOptions = {
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error("Origen no permitido por CORS"), false);  // Rechazar la solicitud
+      callback(new Error("Origen no permitido por CORS"), false);  // Rechazar la solicitud by Cors
     }
   },
   methods: ["GET", "POST", "OPTIONS"],  // Allowed HTTP methods
@@ -266,7 +266,7 @@ if (process.env.NODE_ENV === 'development') {
   });
 }
 
-// Cerrar la conexión con la base de datos al salir
+// Close the database connection on exit
 process.on('exit', () => {
   pool.end();
 });
