@@ -1,10 +1,36 @@
 import dotenv from 'dotenv';
-import path from 'path';
 import https from 'https';
 import http from 'http';
 import fs from 'fs';
 import express, {NextFunction, Request, Response} from 'express';
-import { Pool } from 'pg';
+import axios from 'axios';
+import { AxiosRequestConfig } from 'axios';
+import { fileURLToPath } from 'url';
+import cors from 'cors';
+const app = express();
+
+// Get the current file name and directory name
+const __filename = fileURLToPath(import.meta.url);
+import path from 'path';
+
+// Get the directory name of the current module
+const __dirname = path.dirname(__filename);
+
+interface PersonaResponse {
+  nombres: string;
+  apellidos: string;
+  tipoDocumento: string;
+  documento: string;
+  biometricData?: {
+    image?: string;
+  };
+  actividadEconomicaActual: string;
+  claseVenta: string;
+  solicitudDeAutorizacion?: {
+    fechaFinal?: string;
+    radicadoMercurio?: string;
+  }[];
+}
 
 // This ensures that we do not overwrite NODE_ENV if it is already defined
 if (!process.env.NODE_ENV) {
@@ -23,46 +49,13 @@ if (process.env.NODE_ENV === 'development') {
   console.warn("Entorno desconocido. No se cargaron configuraciones específicas.");
 }
 
-const cors = require('cors');
-const app = express();
-
 // Detect the environment (production or development)
 const isProduction = process.env.NODE_ENV === 'production';
 const port = isProduction ? Number(process.env.PORT) || 8080 : 5000;
 
-// Configure the connection to PostgreSQL locally and on AWS
-const isUsingAws = process.env.USE_AWS_DB === 'true';
-
-// Connections to AWS RDS PostgreSQL require SSL to comply with security best practices
-// In development, we use the local certificate
-const dbSslCertPath = path.resolve(__dirname, '../certs/us-east-1-bundle.pem');
-
-const pool = new Pool({
-  user: isUsingAws ? process.env.AWS_DB_USER : process.env.DB_USER,
-  host: isUsingAws ? process.env.AWS_DB_HOST : process.env.DB_HOST,
-  database: isUsingAws ? process.env.AWS_DB_NAME : process.env.DB_NAME,
-  password: isUsingAws ? process.env.AWS_DB_PASSWORD : process.env.DB_PASSWORD,
-  port: Number(isUsingAws ? process.env.AWS_DB_PORT : process.env.DB_PORT),
-  ssl: isUsingAws
-      ? process.env.NODE_ENV === 'production'
-          ? { rejectUnauthorized: false } // In production, we use AWS SSL without the local file
-          : {
-            rejectUnauthorized: false,
-            ca: fs.readFileSync(dbSslCertPath).toString(), // In development, we use the local certificate
-          }
-      : undefined, // If you are not using AWS, you do not need SSL
-});
-
 // Middleware for handling JSON data and forms
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
-
-// Conditional CORS configuration; app.use(cors());
-/*
-const allowedOrigins = process.env.NODE_ENV === "production"
-    ? ["https://sivep.com", "https://pwa.sivep.com"] // Production domains
-    : ["http://localhost:3000", "https://localhost:3000"]; // Development domains
-*/
+app.use(express.json({ limit: "10mb" })); // 📌 Permite JSON grande (Base64)
+app.use(express.urlencoded({ extended: true, limit: "10mb" })); // 📌 Permite datos codificados en URLs
 
 // This line is similar to the above code
 const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [];
@@ -75,11 +68,12 @@ const corsOptions = {
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error("Origen no permitido por CORS"), false);  // Rechazar la solicitud by Cors
+      callback(new Error("Origen no permitido por CORS"), false);  // Reject the request by Cors
     }
   },
   methods: ["GET", "POST", "OPTIONS"],  // Allowed HTTP methods
-  allowedHeaders: ["Content-Type"],     // Allowed HTTP headers
+  allowedHeaders: ["Content-Type", 'x-access', 'Accept'],
+  credentials: true,// Allowed HTTP headers
 };
 
 app.use(cors(corsOptions));
@@ -96,149 +90,312 @@ app.get('/', (req: Request, res: Response) => {
         description: "Información sobre los endpoints disponibles en la API."
       },
       {
+        method: "GET",
+        path: "/api/proxy-image?url=",
+        description: "Proxy para imágenes que valida dominios permitidos (medellin.gov.co) y requiere autenticación."
+      },
+      {
         method: "POST",
-        path: "/submit",
-        description: "Recibe datos de un formulario y responde con un mensaje de prueba."
+        path: "/login",
+        description: "Autenticación de usuarios contra el sistema SISDEP, requiere username y password."
       },
       {
         method: "GET",
-        path: "/db-test",
-        description: "Prueba la conexión con la base de datos PostgreSQL y devuelve la hora actual del servidor."
-      },
-      {
-        method: "GET",
-        path: "/usuarios-testing",
-        description: "Devuelve todos los registros de la tabla 'sisdep_archivo.persona'."
-      },
-      {
-        method: "GET",
-        path: "/modulo-ventero-resolucion",
-        description: "Devuelve información combinada de las tablas 'persona', 'ventero', 'resolucion' y 'modulo'."
-      },
-      {
-        method: "GET",
-        path: "/modulo-ventero-resolucion-final?id_tenencia_propiedad=",
-        description: "Devuelve información filtrada por el parámetro 'id_tenencia_propiedad'."
+        path: "/ventero-completo/:id",
+        description: "Obtiene información combinada de ventero y persona para un ID específico, requiere token de autenticación."
       }
     ]
   });
 });
 
-// POST route to handle form submissions
-app.post('/submit', (req: Request, res: Response) => {
-  const { name } = req.body;
-  res.send(`Hello, ${name}, we are testing submit button!`);
-});
-
-// GET route to test the connection to the database
-app.get('/db-test', async (req: Request, res: Response) => {
-  try {
-    const result = await pool.query('SELECT NOW()');
-    res.json(result.rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send('Error connecting to the database');
-  }
-});
-
-// GET route to obtain basic information from the database
-app.get('/usuarios-testing', async (req: Request, res: Response) => {
-  try {
-    const query = `
-      SELECT *
-      FROM sisdep_archivo.persona;
-    `;
-
-    const { rows } = await pool.query(query);
-
-    // Returns the response with the data
-    res.json(rows);
-  } catch (error) {
-    console.error('Error ejecutando la consulta', error);
-    res.status(500).send('Error en el servidor');
-  }
-});
-
-// Function to obtain data from Venteros
-app.get('/modulo-ventero-resolucion', async (req: Request, res: Response) => {
-  try {
-    const query = `
-      SELECT
-        p.nombre1 || ' ' || p.apellido1 AS nombre_completo,
-        p.id_tipo_documento,
-        p.documento,
-        p.correo_electronico,
-        v.asociacion_participa,
-        v.actividad,
-        v.clase,
-        r.fecha_vencimiento,
-        r.numero AS numero_resolucion,
-        m.serial_propio
-      FROM
-        sisdep_archivo.persona p
-          LEFT JOIN
-        sisdep_archivo.ventero v ON p.id = v.id
-          LEFT JOIN
-        sisdep_regulaciones.resolucion r ON p.id = r.id
-          LEFT JOIN
-        sisdep_general.modulo m ON p.id = m.id;
-    `;
-
-    const { rows } = await pool.query(query);
-
-    // Returns the response with the data
-    res.json(rows);
-  } catch (error) {
-    console.error('Error ejecutando la consulta', error);
-    res.status(500).send('Error en el servidor');
-  }
-});
-
-// We define a handler for async functions
 const asyncHandler = (fn: Function) => {
   return (req: Request, res: Response, next: NextFunction) => {
     return Promise.resolve(fn(req, res, next)).catch(next);
   };
 };
 
-// Wrapping asynchronous function
-app.get('/modulo-ventero-resolucion-final', asyncHandler(async (req: Request, res: Response) => {
-  const { id_tenencia_propiedad } = req.query;
+app.get('/api/proxy-image', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = req.headers['x-access'];
+  const imageUrl = req.query.url as string;
 
-  console.log("id_tenencia_propiedad", id_tenencia_propiedad);
+  console.log('authToken:', authToken);
+  console.log('imageUrl :', imageUrl);
 
-  if (!id_tenencia_propiedad) {
-    return res.status(400).json({ message: 'El parámetro id_tenencia_propiedad es requerido' });
+  // 1. Strong validations
+  if (!authToken) {
+    return res.status(401).json({
+      success: false,
+      message: 'Token de autenticación requerido'
+    });
   }
 
-  const query = `
-    SELECT p.nombre1 || ' ' || p.apellido1 AS nombre_completo,
-           p.id_tipo_documento,
-           p.documento,
-           p.foto_ventero,
-           p.correo_electronico,
-           v.asociacion_participa,
-           v.actividad,
-           v.clase,
-           r.fecha_vencimiento,
-           r.numero AS numero_resolucion,
-           m.serial_propio
-    FROM sisdep_archivo.persona p
-           LEFT JOIN
-         sisdep_archivo.ventero v ON p.id = v.id
-           LEFT JOIN
-         sisdep_regulaciones.resolucion r ON p.id = r.id
-           LEFT JOIN
-         sisdep_general.modulo m ON p.id = m.id
-    WHERE p.documento = $1;
-  `;
+  if (!imageUrl) {
+    return res.status(400).json({
+      success: false,
+      message: 'Parámetro URL requerido'
+    });
+  }
 
-  const { rows } = await pool.query(query, [id_tenencia_propiedad]);
+  // 2. Allow only specific domains
+  const allowedDomains = [
+    'https://www.medellin.gov.co',
+    'https://medellin.gov.co'
+  ];
 
-  if (rows.length > 0) {
-    res.json(rows[0]); // Returns only the first result
-  } else {
-    res.status(404).json({ message: 'No se encontró información del módulo' });
+  if (!allowedDomains.some(domain => imageUrl.startsWith(domain))) {
+    return res.status(403).json({
+      success: false,
+      message: 'Dominio no permitido'
+    });
+  }
+
+  try {
+    // 3. Axios configuration and timeout
+    const axiosConfig: AxiosRequestConfig = {
+      responseType: 'arraybuffer',
+      timeout: 10000,
+      headers: {
+        'x-access': Array.isArray(authToken) ? authToken[0] : authToken,
+        'Accept': 'image/*'
+      },
+      validateStatus: () => true // Para manejar todos los estados manualmente
+    };
+
+    // 4. Get the image using Axios
+    const response = await axios.get(imageUrl, axiosConfig);
+    console.log('response axios :', response);
+
+    // 5. Validate response status and content type
+    if (response.status !== 200) {
+      return res.status(response.status).json({
+        success: false,
+        message: `Error ${response.status} al obtener la imagen`
+      });
+    }
+
+    const contentType = response.headers['content-type'];
+    if (!contentType?.startsWith('image/')) {
+      return res.status(400).json({
+        success: false,
+        message: 'El recurso no es una imagen válida'
+      });
+    }
+
+    // 6. Configure response headers
+    res.set({
+      'Content-Type': contentType,
+      'Content-Length': response.headers['content-length'],
+      'Cache-Control': 'public, max-age=3600'
+    });
+
+    // 7. Send the image data
+    res.send(response.data);
+
+  } catch (error: any) {
+    console.error('Error en proxy-image:', error);
+
+    if (error.code === 'ECONNABORTED') {
+      return res.status(504).json({
+        success: false,
+        message: 'Timeout al conectar con el servidor de imágenes'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+}));
+
+interface LoginCredentials {
+  username: string;
+  password: string;
+}
+
+interface ExternalLoginResponse {
+  status: string;
+  idGrupo: number;
+  token: string;
+  idUser: number;
+}
+
+interface UserDetailsResponse {
+  entities: {
+    usuario: {
+      [key: number]: {
+        id: number;
+        nombre: string;
+        apellido: string;
+        email: string;
+        esActivo: boolean;
+        idGrupo: number;
+      };
+    };
+  };
+}
+
+// Calling https://www.medellin.gov.co/sisdep Api from sivep backend, login endpoint
+app.post('/login', asyncHandler(async (req: Request, res: Response) => {
+  const { username, password } = req.body as LoginCredentials;
+
+  // Basic validation
+  if (!username || !password) {
+    return res.status(400).json({
+      success: false,
+      message: 'Usuario y contraseña son requeridos'
+    });
+  }
+
+  let timeout: NodeJS.Timeout | null = null;
+  const controller = new AbortController();
+
+  try {
+    timeout = setTimeout(() => controller.abort(), 15000);
+
+    // 1. First login request
+    const loginUrl = 'https://www.medellin.gov.co/sisdep/back/login';
+    const loginResponse = await axios.post<ExternalLoginResponse>(loginUrl, {
+      username,
+      password
+    }, {
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+
+    // console.log('loginResponse ',loginResponse.data.token)
+
+    // Clear timeout if it exists
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+
+    // Validate first login response
+    if (!loginResponse.data.token || loginResponse.data.status !== "logged!, welcome board") {
+      return res.status(401).json({
+        success: false,
+        message: 'Autenticación fallida'
+      });
+    }
+
+    // 2. Validate user details if the first response is successful and active
+    timeout = setTimeout(() => controller.abort(), 10000);
+    const userDetailsUrl = `https://www.medellin.gov.co/sisdep/back/api/seguridad/usuario/ego`;
+
+    const userDetailsResponse = await axios.get<UserDetailsResponse>(userDetailsUrl, {
+      signal: controller.signal,
+      headers: {
+        'x-access': `${loginResponse.data.token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (timeout) clearTimeout(timeout);
+
+    // Validate the second response
+    const userData = userDetailsResponse.data.entities.usuario[loginResponse.data.idUser];
+    if (!userData || !userData.esActivo) {
+      return res.status(403).json({
+        success: false,
+        message: 'El usuario no está activo en el sistema'
+      });
+    }
+
+    // Successful login, return the token and the whole user data
+    res.json({
+      success: true,
+      token: loginResponse.data.token,
+      user: {
+        id: loginResponse.data.idUser,
+        grupo: loginResponse.data.idGrupo,
+        nombre: userData.nombre,
+        apellido: userData.apellido,
+        email: userData.email,
+        activo: userData.esActivo
+      }
+    });
+
+  } catch (error: any) {
+    if (timeout) clearTimeout(timeout);
+
+    if (error.name === 'AbortError' || error.code === 'ECONNABORTED') {
+      return res.status(504).json({
+        success: false,
+        message: 'El servicio no respondió a tiempo'
+      });
+    }
+
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status || 500;
+      const message = error.response?.data?.message || 'Error en el servicio';
+
+      return res.status(status).json({
+        success: false,
+        message: status === 403 ? 'Acceso no autorizado' : message
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor'
+    });
+  }
+}));
+
+app.get('/ventero-completo/:id', asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const authToken = req.headers['x-access'];
+
+  if (!authToken) {
+    return res.status(401).json({ success: false, message: 'Token no proporcionado' });
+  }
+
+  try {
+    // Create proper axios config object
+    const axiosConfig = {
+      headers: {
+        'x-access': Array.isArray(authToken) ? authToken[0] : authToken,
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000
+    };
+
+    const [venteroResponse, personaResponse] = await Promise.all([
+      axios.get(`https://www.medellin.gov.co/sisdep/back/api/ventero/ventero/${id}`, axiosConfig),
+      axios.get(`https://www.medellin.gov.co/sisdep/back/api/ventero/persona/${id}`, axiosConfig)
+    ]);
+
+    res.json({
+      success: true,
+      ventero: venteroResponse.data,
+      persona: personaResponse.data
+    });
+
+  } catch (error: any) {
+    console.error('Error en proxy:', error);
+
+    if (error.response) {
+      // Api error
+      res.status(error.response.status).json({
+        success: false,
+        message: error.response.data?.message || 'Error en el servidor remoto'
+      });
+    } else if (error.request) {
+      // No response from the server
+      res.status(504).json({
+        success: false,
+        message: 'El servidor remoto no respondió'
+      });
+    } else {
+      // Configuration issue or other error
+      res.status(500).json({
+        success: false,
+        message: 'Error interno del proxy'
+      });
+    }
   }
 }));
 
@@ -265,8 +422,3 @@ if (process.env.NODE_ENV === 'development') {
     console.log(`Servidor HTTP corriendo en el puerto ${port} (de producción)`);
   });
 }
-
-// Close the database connection on exit
-process.on('exit', () => {
-  pool.end();
-});
