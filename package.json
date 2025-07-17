@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "ts-node --loader ts-node/esm src/app.ts",
+    "start": "node dist/app.js",
     "build": "tsc",
-    "dev": "ts-node-dev --respawn --transpile-only src/app.ts"
+    "dev": "node --loader ts-node/esm src/app.ts"
   },
   "keywords": [],
   "author": "",
