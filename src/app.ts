@@ -7,14 +7,19 @@ import axios from 'axios';
 import { AxiosRequestConfig } from 'axios';
 import { fileURLToPath } from 'url';
 import cors from 'cors';
+import path from 'path';
 const app = express();
 
+/*
 // Get the current file name and directory name
 const __filename = fileURLToPath(import.meta.url);
 import path from 'path';
 
 // Get the directory name of the current module
 const __dirname = path.dirname(__filename);
+*/
+
+//const __dirname = path.resolve();
 
 interface PersonaResponse {
   nombres: string;
@@ -405,6 +410,10 @@ if (process.env.NODE_ENV === 'development') {
   // Only in development we use HTTPS
   const sslKeyPath = process.env.SSL_KEY_PATH;
   const sslCertPath = process.env.SSL_CERT_PATH;
+
+  if (!sslKeyPath || !sslCertPath) {
+    throw new Error('SSL_KEY_PATH y SSL_CERT_PATH deben estar definidos en desarrollo');
+  }
 
   const httpsOptions = {
     key: fs.readFileSync(sslKeyPath!),
