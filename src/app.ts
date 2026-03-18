@@ -56,7 +56,7 @@ if (process.env.NODE_ENV === 'development') {
 
 // Detect the environment (production or development)
 const isProduction = process.env.NODE_ENV === 'production';
-const port = isProduction ? Number(process.env.PORT) || 8080 : 5000;
+const port = isProduction ? Number(process.env.PORT) || 8080 : 5001;
 
 // Middleware for handling JSON data and forms
 app.use(express.json({ limit: "10mb" })); // 📌 Permite JSON grande (Base64)
