@@ -58,6 +58,8 @@ if (process.env.NODE_ENV === 'development') {
 const isProduction = process.env.NODE_ENV === 'production';
 const port = isProduction ? Number(process.env.PORT) || 8080 : 5001;
 
+const sisdepBaseUrl = (process.env.SISDEP_BASE_URL || 'https://www.medellin.gov.co/sisdep/back').replace(/\/+$/, '');
+
 // Middleware for handling JSON data and forms
 app.use(express.json({ limit: "10mb" })); // 📌 Permite JSON grande (Base64)
 app.use(express.urlencoded({ extended: true, limit: "10mb" })); // 📌 Permite datos codificados en URLs
@@ -260,7 +262,7 @@ app.post('/login', asyncHandler(async (req: Request, res: Response) => {
     timeout = setTimeout(() => controller.abort(), 15000);
 
     // 1. First login request
-    const loginUrl = 'https://www.medellin.gov.co/sisdep/back/login';
+    const loginUrl = `${sisdepBaseUrl}/login`;
     const loginResponse = await axios.post<ExternalLoginResponse>(loginUrl, {
       username,
       password
@@ -288,7 +290,7 @@ app.post('/login', asyncHandler(async (req: Request, res: Response) => {
 
     // 2. Validate user details if the first response is successful and active
     timeout = setTimeout(() => controller.abort(), 10000);
-    const userDetailsUrl = `https://www.medellin.gov.co/sisdep/back/api/seguridad/usuario/ego`;
+    const userDetailsUrl = `${sisdepBaseUrl}/api/seguridad/usuario/ego`;
 
     const userDetailsResponse = await axios.get<UserDetailsResponse>(userDetailsUrl, {
       signal: controller.signal,
@@ -369,8 +371,8 @@ app.get('/ventero-completo/:id', asyncHandler(async (req: Request, res: Response
     };
 
     const [venteroResponse, personaResponse] = await Promise.all([
-      axios.get(`https://www.medellin.gov.co/sisdep/back/api/ventero/ventero/${id}`, axiosConfig),
-      axios.get(`https://www.medellin.gov.co/sisdep/back/api/ventero/persona/${id}`, axiosConfig)
+      axios.get(`${sisdepBaseUrl}/api/ventero/ventero/${id}`, axiosConfig),
+      axios.get(`${sisdepBaseUrl}/api/ventero/persona/${id}`, axiosConfig)
     ]);
 
     res.json({
