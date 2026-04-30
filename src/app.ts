@@ -1,7 +1,5 @@
 import dotenv from 'dotenv';
-import https from 'https';
 import http from 'http';
-import fs from 'fs';
 import express, {NextFunction, Request, Response} from 'express';
 import axios from 'axios';
 import { AxiosRequestConfig } from 'axios';
@@ -125,9 +123,6 @@ app.get('/api/proxy-image', asyncHandler(async (req: Request, res: Response) => 
   const authToken = req.headers['x-access'];
   const imageUrl = req.query.url as string;
 
-  console.log('authToken:', authToken);
-  console.log('imageUrl :', imageUrl);
-
   // 1. Strong validations
   if (!authToken) {
     return res.status(401).json({
@@ -170,7 +165,6 @@ app.get('/api/proxy-image', asyncHandler(async (req: Request, res: Response) => 
 
     // 4. Get the image using Axios
     const response = await axios.get(imageUrl, axiosConfig);
-    console.log('response axios :', response);
 
     // 5. Validate response status and content type
     if (response.status !== 200) {
@@ -180,7 +174,7 @@ app.get('/api/proxy-image', asyncHandler(async (req: Request, res: Response) => 
       });
     }
 
-    const contentType = response.headers['content-type'];
+    const contentType = response.headers['content-type'] as string | undefined;
     if (!contentType?.startsWith('image/')) {
       return res.status(400).json({
         success: false,
@@ -406,30 +400,7 @@ app.get('/ventero-completo/:id', asyncHandler(async (req: Request, res: Response
   }
 }));
 
-// Logic to handle SSL certificate configuration depending on the environment
-if (process.env.NODE_ENV === 'development') {
-
-  // Only in development we use HTTPS
-  const sslKeyPath = process.env.SSL_KEY_PATH;
-  const sslCertPath = process.env.SSL_CERT_PATH;
-
-  if (!sslKeyPath || !sslCertPath) {
-    throw new Error('SSL_KEY_PATH y SSL_CERT_PATH deben estar definidos en desarrollo');
-  }
-
-  const httpsOptions = {
-    key: fs.readFileSync(sslKeyPath!),
-    cert: fs.readFileSync(sslCertPath!),
-  };
-
-  // Using HTTPS in development
-  https.createServer(httpsOptions, app).listen(port, () => {
-    console.log(`Servidor HTTPS corriendo en el puerto ${port} (de desarrollo)`);
-  });
-
-} else {
-// In production, we will use HTTP (HTTPS management is done by the reverse proxy)
-  http.createServer(app).listen(port, '0.0.0.0', () => {
-    console.log(`Servidor HTTP corriendo en el puerto ${port} (de producción)`);
-  });
-}
+// HTTP plano. En producción, el TLS lo termina un reverse proxy (nginx/ALB/etc.).
+http.createServer(app).listen(port, '0.0.0.0', () => {
+  console.log(`Servidor HTTP corriendo en el puerto ${port} (${isProduction ? 'producción' : 'desarrollo'})`);
+});
