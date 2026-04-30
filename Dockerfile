@@ -1,7 +1,4 @@
-FROM node:18-alpine
-
-# Install Python and build tools
-RUN apk add --no-cache python3 make g++
+FROM node:20-alpine
 
 WORKDIR /app
 
@@ -13,9 +10,8 @@ RUN npm run build
 
 RUN npm prune --production
 
-# Set production environment
 ENV NODE_ENV=production
 
-EXPOSE 5000
+EXPOSE 8080
 
-CMD ["npm", "start"]
+CMD ["node", "dist/app.js"]
