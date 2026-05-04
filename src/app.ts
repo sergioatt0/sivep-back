@@ -108,6 +108,11 @@ app.get('/', (req: Request, res: Response) => {
         method: "GET",
         path: "/ventero-completo/:id",
         description: "Obtiene información combinada de ventero y persona para un ID específico, requiere token de autenticación."
+      },
+      {
+        method: "GET",
+        path: "/ventero/:id/expediente",
+        description: "Obtiene el expediente completo del ventero (ventero, persona, dirección, datos de venta) desde SISDEP, requiere token de autenticación."
       }
     ]
   });
@@ -400,7 +405,61 @@ app.get('/ventero-completo/:id', asyncHandler(async (req: Request, res: Response
   }
 }));
 
+app.get('/ventero/:id/expediente', asyncHandler(async (req: Request, res: Response) => {
+  const id = String(req.params.id ?? '');
+  const authToken = req.headers['x-access'];
+
+  if (!authToken) {
+    return res.status(401).json({ success: false, message: 'Token no proporcionado' });
+  }
+
+  if (!/^\d+$/.test(id)) {
+    return res.status(400).json({ success: false, message: 'ID inválido: debe ser numérico' });
+  }
+
+  try {
+    const axiosConfig = {
+      headers: {
+        'x-access': Array.isArray(authToken) ? authToken[0] : authToken,
+        'Content-Type': 'application/json'
+      },
+      timeout: 15000
+    };
+
+    const expedienteResponse = await axios.get(
+      `${sisdepBaseUrl}/api/ventero/ventero/${id}/expediente`,
+      axiosConfig
+    );
+
+    res.status(200).json(expedienteResponse.data);
+
+  } catch (error: any) {
+    console.error('Error en /ventero/:id/expediente:', error.message);
+
+    if (error.response) {
+      res.status(error.response.status).json({
+        success: false,
+        message: error.response.data?.message || 'Error en el servidor remoto'
+      });
+    } else if (error.request) {
+      res.status(504).json({
+        success: false,
+        message: 'El servidor remoto no respondió'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Error interno del proxy'
+      });
+    }
+  }
+}));
+
+export { app };
+
 // HTTP plano. En producción, el TLS lo termina un reverse proxy (nginx/ALB/etc.).
-http.createServer(app).listen(port, '0.0.0.0', () => {
-  console.log(`Servidor HTTP corriendo en el puerto ${port} (${isProduction ? 'producción' : 'desarrollo'})`);
-});
+if (process.env.NODE_ENV !== 'test') {
+  http.createServer(app).listen(port, '0.0.0.0', () => {
+    console.log(`Servidor HTTP corriendo en el puerto ${port} (${isProduction ? 'producción' : 'desarrollo'})`);
+  });
+}

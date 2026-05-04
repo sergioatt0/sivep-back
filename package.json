@@ -6,7 +6,9 @@
     "prestart": "npm run build",
     "start": "node dist/app.js",
     "build": "tsc",
-    "dev": "node --loader ts-node/esm src/app.ts"
+    "dev": "node --loader ts-node/esm src/app.ts",
+    "pretest": "npm run build",
+    "test": "node --test tests/"
   },
   "keywords": [],
   "author": "",
