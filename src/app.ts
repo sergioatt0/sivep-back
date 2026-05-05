@@ -113,6 +113,11 @@ app.get('/', (req: Request, res: Response) => {
         method: "GET",
         path: "/ventero/:id/expediente",
         description: "Obtiene el expediente completo del ventero (ventero, persona, dirección, datos de venta) desde SISDEP, requiere token de autenticación."
+      },
+      {
+        method: "GET",
+        path: "/ventero-por-documento/:documento",
+        description: "Busca un ventero por número de documento usando SISDEP, requiere token de autenticación."
       }
     ]
   });
@@ -435,6 +440,56 @@ app.get('/ventero/:id/expediente', asyncHandler(async (req: Request, res: Respon
 
   } catch (error: any) {
     console.error('Error en /ventero/:id/expediente:', error.message);
+
+    if (error.response) {
+      res.status(error.response.status).json({
+        success: false,
+        message: error.response.data?.message || 'Error en el servidor remoto'
+      });
+    } else if (error.request) {
+      res.status(504).json({
+        success: false,
+        message: 'El servidor remoto no respondió'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Error interno del proxy'
+      });
+    }
+  }
+}));
+
+app.get('/ventero-por-documento/:documento', asyncHandler(async (req: Request, res: Response) => {
+  const documento = String(req.params.documento ?? '');
+  const authToken = req.headers['x-access'];
+
+  if (!authToken) {
+    return res.status(401).json({ success: false, message: 'Token no proporcionado' });
+  }
+
+  if (!/^\d+$/.test(documento)) {
+    return res.status(400).json({ success: false, message: 'Documento inválido: debe ser numérico' });
+  }
+
+  try {
+    const axiosConfig = {
+      headers: {
+        'x-access': Array.isArray(authToken) ? authToken[0] : authToken,
+        'Content-Type': 'application/json'
+      },
+      timeout: 15000
+    };
+
+    const personaResponse = await axios.get(
+      `${sisdepBaseUrl}/api/ventero/persona?documento=${encodeURIComponent(documento)}`,
+      axiosConfig
+    );
+
+    res.status(200).json(personaResponse.data);
+
+  } catch (error: any) {
+    console.error('Error en /ventero-por-documento/:documento:', error.message);
 
     if (error.response) {
       res.status(error.response.status).json({
