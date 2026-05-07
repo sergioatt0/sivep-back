@@ -58,6 +58,11 @@ const port = isProduction ? Number(process.env.PORT) || 8080 : 5001;
 
 const sisdepBaseUrl = (process.env.SISDEP_BASE_URL || 'https://www.medellin.gov.co/sisdep/back').replace(/\/+$/, '');
 
+const imageAllowedOrigins = (process.env.IMAGE_ALLOWED_ORIGINS || 'https://www.medellin.gov.co,https://medellin.gov.co')
+  .split(',')
+  .map(origin => origin.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+
 // Middleware for handling JSON data and forms
 app.use(express.json({ limit: "10mb" })); // 📌 Permite JSON grande (Base64)
 app.use(express.urlencoded({ extended: true, limit: "10mb" })); // 📌 Permite datos codificados en URLs
@@ -149,12 +154,7 @@ app.get('/api/proxy-image', asyncHandler(async (req: Request, res: Response) => 
   }
 
   // 2. Allow only specific domains
-  const allowedDomains = [
-    'https://www.medellin.gov.co',
-    'https://medellin.gov.co'
-  ];
-
-  if (!allowedDomains.some(domain => imageUrl.startsWith(domain))) {
+  if (!imageAllowedOrigins.some(domain => imageUrl.startsWith(domain))) {
     return res.status(403).json({
       success: false,
       message: 'Dominio no permitido'
