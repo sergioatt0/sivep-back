@@ -26,7 +26,12 @@ cp .env.example .env.development.local
 npm start
 ```
 
-El servidor queda disponible en **`https://localhost:5001`** (HTTPS con certificado autofirmado — el navegador mostrará una advertencia, es normal en desarrollo).
+El servidor queda disponible en **`http://localhost:5001`**.
+
+> **TLS en desarrollo:** el backend corre en HTTP plano. La autenticación viaja
+> en el header `x-access` (JWT), no en cookies, así que no hace falta HTTPS
+> para trabajar local. En producción, el TLS lo termina un reverse proxy
+> (ver sección [Despliegue](#despliegue)).
 
 ## Variables de entorno
 
@@ -36,8 +41,6 @@ Ver `.env.example` para la plantilla completa. Variables relevantes:
 |---------------------|---------------------------------------------------------------|--------------------------------------------------------|
 | `NODE_ENV`          | `development` o `production`.                                | `development`                                          |
 | `PORT`              | Puerto HTTP. En desarrollo siempre escucha en 5001.          | 8080 (prod) / 5001 (dev, fijo)                         |
-| `SSL_KEY_PATH`      | Ruta a la llave privada del cert SSL (solo desarrollo).      | —                                                      |
-| `SSL_CERT_PATH`     | Ruta al certificado SSL (solo desarrollo).                   | —                                                      |
 | `ALLOWED_ORIGINS`   | Lista de orígenes permitidos por CORS, separados por coma.   | `[]` (niega todo salvo peticiones sin Origin)          |
 | `SISDEP_BASE_URL`   | Base del API SISDEP, sin slash final.                        | `https://www.medellin.gov.co/sisdep/back`              |
 
@@ -49,7 +52,7 @@ Ver `.env.example` para la plantilla completa. Variables relevantes:
 
 ## Endpoints
 
-Una vez corriendo, `GET https://localhost:5001/` devuelve la lista de endpoints:
+Una vez corriendo, `GET http://localhost:5001/` devuelve la lista de endpoints:
 
 | Método | Ruta                                | Auth (`x-access`) | Descripción                                               |
 |--------|-------------------------------------|-------------------|-----------------------------------------------------------|
@@ -62,12 +65,12 @@ Una vez corriendo, `GET https://localhost:5001/` devuelve la lista de endpoints:
 
 ```bash
 # Login contra el entorno de pruebas (credenciales: admin / prueba123)
-curl -sk -X POST https://localhost:5001/login \
+curl -s -X POST http://localhost:5001/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"prueba123"}'
 
 # Obtener ventero (reemplazar TOKEN con el valor de `token` devuelto arriba)
-curl -sk https://localhost:5001/ventero-completo/1 -H "x-access: TOKEN"
+curl -s http://localhost:5001/ventero-completo/1 -H "x-access: TOKEN"
 ```
 
 ## Scripts npm
@@ -83,10 +86,63 @@ curl -sk https://localhost:5001/ventero-completo/1 -H "x-access: TOKEN"
 ```
 src/
   app.ts                # servidor Express, rutas y proxy a SISDEP
-  controllers/          # (reservado)
-  routes/               # (reservado)
-  views/                # (reservado)
-certs/                  # certificados SSL para desarrollo
-dist/                   # salida compilada (generada por tsc)
+dist/                   # salida compilada (generada por tsc, ignorada por git)
 docs/                   # bitácoras e informes
 ```
+
+## Despliegue
+
+El backend corre **HTTP plano** también en producción. El TLS se termina en un
+reverse proxy (nginx, Traefik, ALB de AWS, Cloud Run, etc.). Esto mantiene el
+código del servidor igual en todos los entornos y centraliza la gestión de
+certificados en una capa dedicada que sabe renovarlos (Let's Encrypt, ACM…).
+
+### Ejemplo mínimo con nginx
+
+Asumiendo que el backend escucha en el puerto `8080` dentro de la red interna
+y el dominio público es `api.sivep.example`:
+
+```nginx
+# /etc/nginx/sites-available/sivep-backend.conf
+
+# Redirección HTTP → HTTPS
+server {
+    listen 80;
+    server_name api.sivep.example;
+    return 301 https://$host$request_uri;
+}
+
+# Terminación TLS y proxy al backend
+server {
+    listen 443 ssl http2;
+    server_name api.sivep.example;
+
+    ssl_certificate     /etc/letsencrypt/live/api.sivep.example/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.sivep.example/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    client_max_body_size 12M;   # coincide con el limit de express.json (10M)
+
+    location / {
+        proxy_pass         http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+    }
+}
+```
+
+Notas operativas:
+
+- Si el backend se va a leer `X-Forwarded-For` para logs o rate-limiting,
+  activar `app.set('trust proxy', 1)` en Express.
+- Obtener y renovar el certificado con Certbot:
+  `sudo certbot --nginx -d api.sivep.example`.
+- Si se despliega en contenedor (Docker), exponer solo el puerto interno a la
+  red del proxy — no publicarlo al host.

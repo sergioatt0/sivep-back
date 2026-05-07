@@ -1,7 +1,5 @@
 import dotenv from 'dotenv';
-import https from 'https';
 import http from 'http';
-import fs from 'fs';
 import express, {NextFunction, Request, Response} from 'express';
 import axios from 'axios';
 import { AxiosRequestConfig } from 'axios';
@@ -60,6 +58,11 @@ const port = isProduction ? Number(process.env.PORT) || 8080 : 5001;
 
 const sisdepBaseUrl = (process.env.SISDEP_BASE_URL || 'https://www.medellin.gov.co/sisdep/back').replace(/\/+$/, '');
 
+const imageAllowedOrigins = (process.env.IMAGE_ALLOWED_ORIGINS || 'https://www.medellin.gov.co,https://medellin.gov.co')
+  .split(',')
+  .map(origin => origin.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+
 // Middleware for handling JSON data and forms
 app.use(express.json({ limit: "10mb" })); // 📌 Permite JSON grande (Base64)
 app.use(express.urlencoded({ extended: true, limit: "10mb" })); // 📌 Permite datos codificados en URLs
@@ -110,6 +113,16 @@ app.get('/', (req: Request, res: Response) => {
         method: "GET",
         path: "/ventero-completo/:id",
         description: "Obtiene información combinada de ventero y persona para un ID específico, requiere token de autenticación."
+      },
+      {
+        method: "GET",
+        path: "/ventero/:id/expediente",
+        description: "Obtiene el expediente completo del ventero (ventero, persona, dirección, datos de venta) desde SISDEP, requiere token de autenticación."
+      },
+      {
+        method: "GET",
+        path: "/ventero-por-documento/:documento",
+        description: "Busca un ventero por número de documento usando SISDEP, requiere token de autenticación."
       }
     ]
   });
@@ -124,9 +137,6 @@ const asyncHandler = (fn: Function) => {
 app.get('/api/proxy-image', asyncHandler(async (req: Request, res: Response) => {
   const authToken = req.headers['x-access'];
   const imageUrl = req.query.url as string;
-
-  console.log('authToken:', authToken);
-  console.log('imageUrl :', imageUrl);
 
   // 1. Strong validations
   if (!authToken) {
@@ -144,12 +154,7 @@ app.get('/api/proxy-image', asyncHandler(async (req: Request, res: Response) => 
   }
 
   // 2. Allow only specific domains
-  const allowedDomains = [
-    'https://www.medellin.gov.co',
-    'https://medellin.gov.co'
-  ];
-
-  if (!allowedDomains.some(domain => imageUrl.startsWith(domain))) {
+  if (!imageAllowedOrigins.some(domain => imageUrl.startsWith(domain))) {
     return res.status(403).json({
       success: false,
       message: 'Dominio no permitido'
@@ -170,7 +175,6 @@ app.get('/api/proxy-image', asyncHandler(async (req: Request, res: Response) => 
 
     // 4. Get the image using Axios
     const response = await axios.get(imageUrl, axiosConfig);
-    console.log('response axios :', response);
 
     // 5. Validate response status and content type
     if (response.status !== 200) {
@@ -180,7 +184,7 @@ app.get('/api/proxy-image', asyncHandler(async (req: Request, res: Response) => 
       });
     }
 
-    const contentType = response.headers['content-type'];
+    const contentType = response.headers['content-type'] as string | undefined;
     if (!contentType?.startsWith('image/')) {
       return res.status(400).json({
         success: false,
@@ -406,30 +410,111 @@ app.get('/ventero-completo/:id', asyncHandler(async (req: Request, res: Response
   }
 }));
 
-// Logic to handle SSL certificate configuration depending on the environment
-if (process.env.NODE_ENV === 'development') {
+app.get('/ventero/:id/expediente', asyncHandler(async (req: Request, res: Response) => {
+  const id = String(req.params.id ?? '');
+  const authToken = req.headers['x-access'];
 
-  // Only in development we use HTTPS
-  const sslKeyPath = process.env.SSL_KEY_PATH;
-  const sslCertPath = process.env.SSL_CERT_PATH;
-
-  if (!sslKeyPath || !sslCertPath) {
-    throw new Error('SSL_KEY_PATH y SSL_CERT_PATH deben estar definidos en desarrollo');
+  if (!authToken) {
+    return res.status(401).json({ success: false, message: 'Token no proporcionado' });
   }
 
-  const httpsOptions = {
-    key: fs.readFileSync(sslKeyPath!),
-    cert: fs.readFileSync(sslCertPath!),
-  };
+  if (!/^\d+$/.test(id)) {
+    return res.status(400).json({ success: false, message: 'ID inválido: debe ser numérico' });
+  }
 
-  // Using HTTPS in development
-  https.createServer(httpsOptions, app).listen(port, () => {
-    console.log(`Servidor HTTPS corriendo en el puerto ${port} (de desarrollo)`);
-  });
+  try {
+    const axiosConfig = {
+      headers: {
+        'x-access': Array.isArray(authToken) ? authToken[0] : authToken,
+        'Content-Type': 'application/json'
+      },
+      timeout: 15000
+    };
 
-} else {
-// In production, we will use HTTP (HTTPS management is done by the reverse proxy)
+    const expedienteResponse = await axios.get(
+      `${sisdepBaseUrl}/api/ventero/ventero/${id}/expediente`,
+      axiosConfig
+    );
+
+    res.status(200).json(expedienteResponse.data);
+
+  } catch (error: any) {
+    console.error('Error en /ventero/:id/expediente:', error.message);
+
+    if (error.response) {
+      res.status(error.response.status).json({
+        success: false,
+        message: error.response.data?.message || 'Error en el servidor remoto'
+      });
+    } else if (error.request) {
+      res.status(504).json({
+        success: false,
+        message: 'El servidor remoto no respondió'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Error interno del proxy'
+      });
+    }
+  }
+}));
+
+app.get('/ventero-por-documento/:documento', asyncHandler(async (req: Request, res: Response) => {
+  const documento = String(req.params.documento ?? '');
+  const authToken = req.headers['x-access'];
+
+  if (!authToken) {
+    return res.status(401).json({ success: false, message: 'Token no proporcionado' });
+  }
+
+  if (!/^\d+$/.test(documento)) {
+    return res.status(400).json({ success: false, message: 'Documento inválido: debe ser numérico' });
+  }
+
+  try {
+    const axiosConfig = {
+      headers: {
+        'x-access': Array.isArray(authToken) ? authToken[0] : authToken,
+        'Content-Type': 'application/json'
+      },
+      timeout: 15000
+    };
+
+    const personaResponse = await axios.get(
+      `${sisdepBaseUrl}/api/ventero/persona?documento=${encodeURIComponent(documento)}`,
+      axiosConfig
+    );
+
+    res.status(200).json(personaResponse.data);
+
+  } catch (error: any) {
+    console.error('Error en /ventero-por-documento/:documento:', error.message);
+
+    if (error.response) {
+      res.status(error.response.status).json({
+        success: false,
+        message: error.response.data?.message || 'Error en el servidor remoto'
+      });
+    } else if (error.request) {
+      res.status(504).json({
+        success: false,
+        message: 'El servidor remoto no respondió'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Error interno del proxy'
+      });
+    }
+  }
+}));
+
+export { app };
+
+// HTTP plano. En producción, el TLS lo termina un reverse proxy (nginx/ALB/etc.).
+if (process.env.NODE_ENV !== 'test') {
   http.createServer(app).listen(port, '0.0.0.0', () => {
-    console.log(`Servidor HTTP corriendo en el puerto ${port} (de producción)`);
+    console.log(`Servidor HTTP corriendo en el puerto ${port} (${isProduction ? 'producción' : 'desarrollo'})`);
   });
 }
