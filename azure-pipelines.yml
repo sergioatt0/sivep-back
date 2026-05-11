@@ -37,7 +37,7 @@ steps:
     curl -X POST \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $(System.AccessToken)" \
-      https://dev.azure.com/devsisdep/sisdep/_apis/pipelines/10/runs?api-version=7.0 \
+      https://dev.azure.com/devsisdep/sisdep/_apis/pipelines/12/runs?api-version=7.0 \
       -d '{
         "resources": {
           "repositories": {
