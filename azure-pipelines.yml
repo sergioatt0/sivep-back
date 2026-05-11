@@ -1,0 +1,54 @@
+trigger:
+  tags:
+    include:
+      - v*
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  AWS_REGION: us-east-2
+  REGISTRY: 668384615068.dkr.ecr.us-east-2.amazonaws.com
+  IMAGE_NAME: sivep-back
+  TAG: $(Build.SourceBranchName)
+
+steps:
+- checkout: self
+
+- script: |
+    docker build \
+      -t $(IMAGE_NAME):$(TAG) \
+      -f Dockerfile .
+  displayName: Build Image
+
+- task: ECRPushImage@1
+  inputs:
+    awsCredentials: 'AWS-CONNECTION'
+    regionName: $(AWS_REGION)
+    imageSource: 'imagename'
+    sourceImageName: $(IMAGE_NAME)
+    sourceImageTag: $(TAG)
+    repositoryName: $(IMAGE_NAME)
+    pushTag: $(TAG)
+
+- script: |
+    echo "Triggering CD pipeline..."
+
+    curl -X POST \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $(System.AccessToken)" \
+      https://dev.azure.com/devsisdep/sisdep/_apis/pipelines/10/runs?api-version=7.0 \
+      -d '{
+        "resources": {
+          "repositories": {
+            "self": {
+              "refName": "$(Build.SourceBranch)"
+            }
+          }
+        },
+        "templateParameters": {
+          "tag": "$(TAG)"
+        }
+      }'
+  displayName: Trigger CD Pipeline
+    

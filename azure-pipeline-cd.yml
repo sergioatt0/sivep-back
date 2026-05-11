@@ -1,0 +1,112 @@
+trigger: none
+
+parameters:
+- name: tag
+  displayName: Image Tag
+  type: string
+
+variables:
+  AWS_REGION: us-east-2
+  REGISTRY: 668384615068.dkr.ecr.us-east-2.amazonaws.com
+
+stages:
+
+# ========================
+# UAT (SIN APPROVAL)
+# ========================
+- stage: UAT
+  displayName: Deploy UAT
+  jobs:
+  - deployment: DeployUat
+    displayName: Deploy to UAT
+    environment: sisdep-back-uat
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: SSH@0
+            inputs:
+              sshEndpoint: 'EC2-SISDEP'
+              runOptions: 'commands'
+              commands: |
+                set -e
+
+                echo "===> Login to ECR"
+                aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(REGISTRY) 2>/dev/null
+
+                echo "===> Pulling image"
+                docker pull $(REGISTRY)/sisdep-back:${{ parameters.tag }} 2>/dev/null
+
+                echo "===> Updating service"
+                docker service update --force --with-registry-auth --image $(REGISTRY)/sisdep-back:${{ parameters.tag }} sisdep-uat_back
+
+                echo "===> Updating docker-stack.yml"
+                TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sisdep-uat/docker-stack.yml
+
+# ========================
+# QA (CON APPROVAL)
+# ========================
+- stage: QA
+  displayName: Deploy QA
+  dependsOn: UAT
+  condition: succeeded()
+  jobs:
+  - deployment: DeployQA
+    displayName: Deploy to QA
+    environment: sisdep-back-qa 
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: SSH@0
+            inputs:
+              sshEndpoint: 'EC2-SISDEP'
+              runOptions: 'commands'
+              commands: |
+                set -e
+
+                echo "===> Login to ECR"
+                aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(REGISTRY) 2>/dev/null
+
+                echo "===> Pulling image"
+                docker pull $(REGISTRY)/sisdep-back:${{ parameters.tag }} 2>/dev/null
+
+                echo "===> Updating service"
+                docker service update --force --with-registry-auth --image $(REGISTRY)/sisdep-back:${{ parameters.tag }} sisdep-qa_back
+
+                echo "===> Updating docker-stack.yml"
+                TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sisdep-qa/docker-stack.yml
+
+# ========================
+# PREPROD (CON APPROVAL)
+# ========================
+- stage: PREPROD
+  displayName: Deploy PREPROD
+  dependsOn: QA
+  condition: succeeded()
+  jobs:
+  - deployment: DeployPreprod
+    displayName: Deploy to PREPROD
+    environment: sisdep-back-preprod 
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: SSH@0
+            inputs:
+              sshEndpoint: 'EC2-SISDEP'
+              runOptions: 'commands'
+              commands: |
+                set -e
+
+                echo "===> Login to ECR"
+                aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(REGISTRY) 2>/dev/null
+
+                echo "===> Pulling image"
+                docker pull $(REGISTRY)/sisdep-back:${{ parameters.tag }} 2>/dev/null
+
+                echo "===> Updating service"
+                docker service update --force --with-registry-auth --image $(REGISTRY)/sisdep-back:${{ parameters.tag }} sisdep_back
+
+                echo "===> Updating docker-stack.yml"
+                TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sisdep/docker-stack.yml
