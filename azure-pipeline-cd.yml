@@ -25,7 +25,7 @@ stages:
   jobs:
   - deployment: DeployUat
     displayName: Deploy to UAT
-    environment: sisdep-back-uat
+    environment: sivep-back-uat
     strategy:
       runOnce:
         deploy:
@@ -41,13 +41,13 @@ stages:
                 aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(REGISTRY) 2>/dev/null
 
                 echo "===> Pulling image"
-                docker pull $(REGISTRY)/sisdep-back:${{ parameters.tag }} 2>/dev/null
+                docker pull $(REGISTRY)/sivep-back:${{ parameters.tag }} 2>/dev/null
 
                 echo "===> Updating service"
-                docker service update --force --with-registry-auth --image $(REGISTRY)/sisdep-back:${{ parameters.tag }} sisdep-uat_back
+                docker service update --force --with-registry-auth --image $(REGISTRY)/sivep-back:${{ parameters.tag }} sivep-uat_back
 
                 echo "===> Updating docker-stack.yml"
-                TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sisdep-uat/docker-stack.yml
+                TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sivep-uat/docker-stack.yml
 
   - job: Notify_UAT
     displayName: Notify UAT
@@ -78,7 +78,7 @@ stages:
   jobs:
   - deployment: DeployQA
     displayName: Deploy to QA
-    environment: sisdep-back-qa 
+    environment: sivep-back-qa 
     strategy:
       runOnce:
         deploy:
@@ -94,13 +94,13 @@ stages:
                 aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(REGISTRY) 2>/dev/null
 
                 echo "===> Pulling image"
-                docker pull $(REGISTRY)/sisdep-back:${{ parameters.tag }} 2>/dev/null
+                docker pull $(REGISTRY)/sivep-back:${{ parameters.tag }} 2>/dev/null
 
                 echo "===> Updating service"
-                docker service update --force --with-registry-auth --image $(REGISTRY)/sisdep-back:${{ parameters.tag }} sisdep-qa_back
+                docker service update --force --with-registry-auth --image $(REGISTRY)/sivep-back:${{ parameters.tag }} sivep-qa_back
 
                 echo "===> Updating docker-stack.yml"
-                TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sisdep-qa/docker-stack.yml
+                TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sivep-qa/docker-stack.yml
 
   - job: Notify_QA
     displayName: Notify QA
@@ -131,7 +131,7 @@ stages:
   jobs:
   - deployment: DeployPreprod
     displayName: Deploy to PREPROD
-    environment: sisdep-back-preprod 
+    environment: sivep-back-preprod 
     strategy:
       runOnce:
         deploy:
@@ -147,13 +147,13 @@ stages:
                 aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(REGISTRY) 2>/dev/null
 
                 echo "===> Pulling image"
-                docker pull $(REGISTRY)/sisdep-back:${{ parameters.tag }} 2>/dev/null
+                docker pull $(REGISTRY)/sivep-back:${{ parameters.tag }} 2>/dev/null
 
                 echo "===> Updating service"
-                docker service update --force --with-registry-auth --image $(REGISTRY)/sisdep-back:${{ parameters.tag }} sisdep_back
+                docker service update --force --with-registry-auth --image $(REGISTRY)/sivep-back:${{ parameters.tag }} sivep_back
 
                 echo "===> Updating docker-stack.yml"
-                TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sisdep/docker-stack.yml
+                TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sivep/docker-stack.yml
 
   - job: Notify_PREPROD
     displayName: Notify PREPROD
