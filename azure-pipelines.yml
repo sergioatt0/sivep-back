@@ -73,6 +73,7 @@ stages:
         type: BUILD
         environment: BUILD
         status: FAILED
+        tag: $(TAG)
 
   # -----------------------------------------
   # TRIGGER CD UAT
