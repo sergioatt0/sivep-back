@@ -60,6 +60,7 @@ stages:
         type: DEPLOY
         environment: UAT
         status: $(DEPLOY_STATUS)
+        tag: ${{ parameters.tag }}
 
 # ========================
 # QA (CON APPROVAL)
@@ -112,6 +113,7 @@ stages:
         type: DEPLOY
         environment: QA
         status: $(DEPLOY_STATUS)
+        tag: ${{ parameters.tag }}
 
 # ========================
 # PREPROD (CON APPROVAL)
@@ -164,3 +166,4 @@ stages:
         type: DEPLOY
         environment: PREPROD
         status: $(DEPLOY_STATUS)
+        tag: ${{ parameters.tag }}

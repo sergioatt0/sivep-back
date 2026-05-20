@@ -8,13 +8,16 @@ parameters:
 - name: status
   type: string
 
+- name: tag
+  type: string
+
 steps:
 
 - script: |
 
     if [ "${{ parameters.status }}" = "Succeeded" ]; then
 
-      ICON="✅"
+      ICON="🚀"
       TITLE="DESPLIEGUE EXITOSO"
 
     else
@@ -34,7 +37,7 @@ steps:
     ${{ parameters.environment }}
 
     Tag:
-    $(Build.SourceBranchName)
+    ${{ parameters.tag }}
 
     Ejecutado por:
     $(Build.RequestedFor)
