@@ -96,22 +96,22 @@ stages:
                 TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sisdep-qa/docker-stack.yml
 
   - job: Notify_QA
-  displayName: Notify QA
+    displayName: Notify QA
 
-  dependsOn: DeployQA
+    dependsOn: DeployQA
 
-  condition: always()
+    condition: always()
 
-  variables:
-    DEPLOY_STATUS: $[ dependencies.DeployQA.result ]
+    variables:
+      DEPLOY_STATUS: $[ dependencies.DeployQA.result ]
 
-  steps:
+    steps:
 
-  - template: DevOps/telegram-notify.yml
-    parameters:
-      type: DEPLOY
-      environment: QA
-      status: $(DEPLOY_STATUS)
+    - template: DevOps/telegram-notify.yml
+      parameters:
+        type: DEPLOY
+        environment: QA
+        status: $(DEPLOY_STATUS)
 
 # ========================
 # PREPROD (CON APPROVAL)
@@ -148,19 +148,19 @@ stages:
                 TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sisdep/docker-stack.yml
 
   - job: Notify_PREPROD
-  displayName: Notify PREPROD
+    displayName: Notify PREPROD
 
-  dependsOn: DeployPreprod
+    dependsOn: DeployPreprod
 
-  condition: always()
+    condition: always()
 
-  variables:
-    DEPLOY_STATUS: $[ dependencies.DeployPreprod.result ]
+    variables:
+      DEPLOY_STATUS: $[ dependencies.DeployPreprod.result ]
 
-  steps:
+    steps:
 
-  - template: DevOps/telegram-notify.yml
-    parameters:
-      type: DEPLOY
-      environment: PREPROD
-      status: $(DEPLOY_STATUS)
+    - template: DevOps/telegram-notify.yml
+      parameters:
+        type: DEPLOY
+        environment: PREPROD
+        status: $(DEPLOY_STATUS)
