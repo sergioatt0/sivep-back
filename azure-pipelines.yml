@@ -7,48 +7,103 @@ pool:
   vmImage: 'ubuntu-latest'
 
 variables:
-  AWS_REGION: us-east-2
-  REGISTRY: 668384615068.dkr.ecr.us-east-2.amazonaws.com
-  IMAGE_NAME: sivep-back
-  TAG: $(Build.SourceBranchName)
+- group: telegram-notifications
 
-steps:
-- checkout: self
+- name: AWS_REGION
+  value: us-east-2
 
-- script: |
-    docker build \
-      -t $(IMAGE_NAME):$(TAG) \
-      -f Dockerfile .
-  displayName: Build Image
+- name: REGISTRY
+  value: 668384615068.dkr.ecr.us-east-2.amazonaws.com
 
-- task: ECRPushImage@1
-  inputs:
-    awsCredentials: 'AWS-CONNECTION'
-    regionName: $(AWS_REGION)
-    imageSource: 'imagename'
-    sourceImageName: $(IMAGE_NAME)
-    sourceImageTag: $(TAG)
-    repositoryName: $(IMAGE_NAME)
-    pushTag: $(TAG)
+- name: IMAGE_NAME
+  value: sivep-back
 
-- script: |
-    echo "Triggering CD pipeline..."
+- name: TAG
+  value: $(Build.SourceBranchName)
 
-    curl -X POST \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Bearer $(System.AccessToken)" \
-      https://dev.azure.com/devsisdep/sisdep/_apis/pipelines/12/runs?api-version=7.0 \
-      -d '{
-        "resources": {
-          "repositories": {
-            "self": {
-              "refName": "$(Build.SourceBranch)"
+stages:
+- stage: BUILD
+  displayName: Build Backend Image
+
+  jobs:
+  - job: Build_Back
+    displayName: Build & Push Docker Image
+
+    steps:
+
+    - checkout: self
+
+    - script: |
+        docker build \
+          --label version=$(TAG) \
+          --label repository=$(Build.Repository.Name) \
+          --label build=$(Build.BuildId) \
+          -t $(IMAGE_NAME):$(TAG) \
+          -f Dockerfile \
+          .
+
+      displayName: Build Image
+
+    - task: ECRPushImage@1
+      inputs:
+        awsCredentials: 'AWS-CONNECTION'
+        regionName: $(AWS_REGION)
+        imageSource: 'imagename'
+        sourceImageName: $(IMAGE_NAME)
+        sourceImageTag: $(TAG)
+        repositoryName: $(IMAGE_NAME)
+        pushTag: $(TAG)
+
+      displayName: Push Image to ECR
+
+  # -----------------------------------------
+  # TELEGRAM SOLO SI FALLA BUILD
+  # -----------------------------------------
+  - job: Notify_Build_Failed
+    displayName: Notify Build Failed
+
+    dependsOn: Build_Back
+
+    condition: failed()
+
+    steps:
+
+    - template: DevOps/telegram-notify.yml
+      parameters:
+        type: BUILD
+        environment: BUILD
+        status: FAILED
+
+  # -----------------------------------------
+  # TRIGGER CD UAT
+  # -----------------------------------------
+  - job: Trigger_CD_UAT
+    displayName: Trigger CD Pipeline UAT
+
+    dependsOn: Build_Back
+
+    condition: succeeded()
+
+    steps:
+
+    - script: |
+        echo "Triggering CD pipeline..."
+
+        curl -s -X POST \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer $(System.AccessToken)" \
+          https://dev.azure.com/devsisdep/sisdep/_apis/pipelines/12/runs?api-version=7.0 \
+          -d '{
+            "resources": {
+              "repositories": {
+                "self": {
+                  "refName": "$(Build.SourceBranch)"
+                }
+              }
+            },
+            "templateParameters": {
+              "tag": "$(TAG)"
             }
-          }
-        },
-        "templateParameters": {
-          "tag": "$(TAG)"
-        }
-      }'
-  displayName: Trigger CD Pipeline
-    
+          }'
+
+      displayName: Trigger CD UAT Pipeline

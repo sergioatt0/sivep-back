@@ -1,0 +1,54 @@
+parameters:
+- name: type
+  type: string
+
+- name: environment
+  type: string
+
+- name: status
+  type: string
+
+steps:
+
+- script: |
+
+    if [ "${{ parameters.status }}" = "Succeeded" ]; then
+
+      ICON="✅"
+      TITLE="DESPLIEGUE EXITOSO"
+
+    else
+
+      ICON="❌"
+      TITLE="DESPLIEGUE FALLIDO"
+
+    fi
+
+    MESSAGE="
+    $ICON $TITLE
+
+    Repositorio:
+    $(Build.Repository.Name)
+
+    Ambiente:
+    ${{ parameters.environment }}
+
+    Tag:
+    $(Build.SourceBranchName)
+
+    Ejecutado por:
+    $(Build.RequestedFor)
+
+    Estado:
+    ${{ parameters.status }}
+
+    Pipeline:
+    $(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)
+    "
+
+    curl -s -X POST \
+      https://api.telegram.org/bot$(TELEGRAM_BOT_TOKEN)/sendMessage \
+      -d chat_id=$(TELEGRAM_CHAT_ID) \
+      --data-urlencode text="$MESSAGE"
+
+  displayName: Telegram Notification

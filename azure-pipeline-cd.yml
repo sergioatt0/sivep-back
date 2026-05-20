@@ -43,6 +43,24 @@ stages:
                 echo "===> Updating docker-stack.yml"
                 TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sisdep-uat/docker-stack.yml
 
+  - job: Notify_UAT
+    displayName: Notify UAT
+
+    dependsOn: DeployUat
+
+    condition: always()
+
+    variables:
+      DEPLOY_STATUS: $[ dependencies.DeployUat.result ]
+
+    steps:
+
+    - template: DevOps/telegram-notify.yml
+      parameters:
+        type: DEPLOY
+        environment: UAT
+        status: $(DEPLOY_STATUS)
+
 # ========================
 # QA (CON APPROVAL)
 # ========================
@@ -77,12 +95,30 @@ stages:
                 echo "===> Updating docker-stack.yml"
                 TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sisdep-qa/docker-stack.yml
 
+  - job: Notify_QA
+  displayName: Notify QA
+
+  dependsOn: DeployQA
+
+  condition: always()
+
+  variables:
+    DEPLOY_STATUS: $[ dependencies.DeployQA.result ]
+
+  steps:
+
+  - template: DevOps/telegram-notify.yml
+    parameters:
+      type: DEPLOY
+      environment: QA
+      status: $(DEPLOY_STATUS)
+
 # ========================
 # PREPROD (CON APPROVAL)
 # ========================
 - stage: PREPROD
   displayName: Deploy PREPROD
-  dependsOn: QA
+  dependsOn: UAT
   condition: succeeded()
   jobs:
   - deployment: DeployPreprod
@@ -110,3 +146,21 @@ stages:
 
                 echo "===> Updating docker-stack.yml"
                 TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sisdep/docker-stack.yml
+
+  - job: Notify_PREPROD
+  displayName: Notify PREPROD
+
+  dependsOn: DeployPreprod
+
+  condition: always()
+
+  variables:
+    DEPLOY_STATUS: $[ dependencies.DeployPreprod.result ]
+
+  steps:
+
+  - template: DevOps/telegram-notify.yml
+    parameters:
+      type: DEPLOY
+      environment: PREPROD
+      status: $(DEPLOY_STATUS)
