@@ -81,7 +81,7 @@ const corsOptions = {
       callback(new Error("Origen no permitido por CORS"), false);  // Reject the request by Cors
     }
   },
-  methods: ["GET", "POST", "OPTIONS"],  // Allowed HTTP methods
+  methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],  // Allowed HTTP methods
   allowedHeaders: ["Content-Type", 'x-access', 'Accept'],
   credentials: true,// Allowed HTTP headers
 };
@@ -123,6 +123,26 @@ app.get('/', (req: Request, res: Response) => {
         method: "GET",
         path: "/ventero-por-documento/:documento",
         description: "Busca un ventero por número de documento usando SISDEP, requiere token de autenticación."
+      },
+      {
+        method: "GET|POST|PATCH|DELETE",
+        path: "/api/dominios/tipoReporteSivep[/:id]",
+        description: "CRUD del catálogo de prioridades de Reporte SIVEP (1=Grave, 2=Media, 3=Baja, 4=En prioridad). Proxy a SISDEP."
+      },
+      {
+        method: "GET|POST|PATCH|DELETE",
+        path: "/api/social/reporteSivep[/:id]",
+        description: "CRUD de reportes SIVEP sobre venteros. Incluye GET /paginated con query params estándar. Proxy a SISDEP."
+      },
+      {
+        method: "POST",
+        path: "/api/archivos",
+        description: "Sube foto/firma a SISDEP (multipart con partes 'info' y 'file'). Devuelve { archivos: [{ id, fullPath, ... }] }."
+      },
+      {
+        method: "GET",
+        path: "/api/archivos/:folder/:filename",
+        description: "Descarga binaria de un archivo guardado en SISDEP, requiere token. Stream passthrough."
       }
     ]
   });
@@ -507,6 +527,325 @@ app.get('/ventero-por-documento/:documento', asyncHandler(async (req: Request, r
         message: 'Error interno del proxy'
       });
     }
+  }
+}));
+
+// ============================================================
+// Reporte SIVEP — proxy a SISDEP
+// Dominio: /api/dominios/tipoReporteSivep
+// Reporte: /api/social/reporteSivep
+// ============================================================
+
+function buildAxiosConfig(authToken: string | string[], query?: any): AxiosRequestConfig {
+  return {
+    headers: {
+      'x-access': Array.isArray(authToken) ? authToken[0] : authToken,
+      'Content-Type': 'application/json'
+    },
+    params: query,
+    timeout: 15000
+  };
+}
+
+function handleProxyError(error: any, res: Response, route: string) {
+  console.error(`Error en ${route}:`, error.message);
+  if (error.response) {
+    res.status(error.response.status).json({
+      success: false,
+      message: error.response.data?.message || 'Error en el servidor remoto'
+    });
+  } else if (error.request) {
+    res.status(504).json({
+      success: false,
+      message: 'El servidor remoto no respondió'
+    });
+  } else {
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del proxy'
+    });
+  }
+}
+
+function requireToken(req: Request, res: Response): string | string[] | null {
+  const authToken = req.headers['x-access'];
+  if (!authToken) {
+    res.status(401).json({ success: false, message: 'Token no proporcionado' });
+    return null;
+  }
+  return authToken;
+}
+
+function requireNumericId(req: Request, res: Response): string | null {
+  const id = String(req.params.id ?? '');
+  if (!/^\d+$/.test(id)) {
+    res.status(400).json({ success: false, message: 'ID inválido: debe ser numérico' });
+    return null;
+  }
+  return id;
+}
+
+// --- Dominio: tipoReporteSivep ---
+
+app.get('/api/dominios/tipoReporteSivep', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/dominios/tipoReporteSivep`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/dominios/tipoReporteSivep');
+  }
+}));
+
+app.get('/api/dominios/tipoReporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/dominios/tipoReporteSivep/${id}`,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/dominios/tipoReporteSivep/:id');
+  }
+}));
+
+app.post('/api/dominios/tipoReporteSivep', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.post(
+      `${sisdepBaseUrl}/api/dominios/tipoReporteSivep`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'POST /api/dominios/tipoReporteSivep');
+  }
+}));
+
+app.patch('/api/dominios/tipoReporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.patch(
+      `${sisdepBaseUrl}/api/dominios/tipoReporteSivep/${id}`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'PATCH /api/dominios/tipoReporteSivep/:id');
+  }
+}));
+
+app.delete('/api/dominios/tipoReporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.delete(
+      `${sisdepBaseUrl}/api/dominios/tipoReporteSivep/${id}`,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data ?? { success: true });
+  } catch (error: any) {
+    handleProxyError(error, res, 'DELETE /api/dominios/tipoReporteSivep/:id');
+  }
+}));
+
+// --- Reporte SIVEP ---
+// IMPORTANTE: /paginated debe registrarse antes que /:id para que Express
+// no capture "paginated" como id dinámico.
+
+app.get('/api/social/reporteSivep/paginated', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/social/reporteSivep/paginated`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/social/reporteSivep/paginated');
+  }
+}));
+
+app.get('/api/social/reporteSivep', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/social/reporteSivep`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/social/reporteSivep');
+  }
+}));
+
+app.get('/api/social/reporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/social/reporteSivep/${id}`,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/social/reporteSivep/:id');
+  }
+}));
+
+app.post('/api/social/reporteSivep', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.post(
+      `${sisdepBaseUrl}/api/social/reporteSivep`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'POST /api/social/reporteSivep');
+  }
+}));
+
+app.patch('/api/social/reporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.patch(
+      `${sisdepBaseUrl}/api/social/reporteSivep/${id}`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'PATCH /api/social/reporteSivep/:id');
+  }
+}));
+
+app.delete('/api/social/reporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.delete(
+      `${sisdepBaseUrl}/api/social/reporteSivep/${id}`,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data ?? { success: true });
+  } catch (error: any) {
+    handleProxyError(error, res, 'DELETE /api/social/reporteSivep/:id');
+  }
+}));
+
+// ============================================================
+// Archivos — proxy del endpoint genérico SISDEP
+// POST /api/archivos        : sube multipart, devuelve { archivos: [{ id, fullPath, ... }] }
+// GET  /api/archivos/:folder/:filename : sirve el binario guardado
+// ============================================================
+
+// POST: passthrough del stream multipart. NO usar express.json — el body
+// llega como stream binario porque su Content-Type es multipart/form-data.
+app.post('/api/archivos', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+
+  const contentType = req.headers['content-type'];
+  if (!contentType || !contentType.startsWith('multipart/form-data')) {
+    return res.status(400).json({
+      success: false,
+      message: 'Content-Type debe ser multipart/form-data'
+    });
+  }
+
+  try {
+    const upstream = await axios.post(
+      `${sisdepBaseUrl}/api/archivos`,
+      req,
+      {
+        headers: {
+          'x-access': Array.isArray(authToken) ? authToken[0] : authToken,
+          'content-type': contentType,
+          ...(req.headers['content-length'] ? { 'content-length': req.headers['content-length'] } : {})
+        },
+        maxBodyLength: 50 * 1024 * 1024,
+        maxContentLength: 50 * 1024 * 1024,
+        timeout: 60000
+      }
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'POST /api/archivos');
+  }
+}));
+
+// GET: descarga binaria del archivo guardado. Stream passthrough.
+app.get('/api/archivos/:folder/:filename', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+
+  const folder = String(req.params.folder ?? '');
+  const filename = String(req.params.filename ?? '');
+  // Defensa básica contra path traversal — Express ya decodifica %2F.
+  if (/[\\/]/.test(folder) || /[\\/]/.test(filename) || folder.includes('..') || filename.includes('..')) {
+    return res.status(400).json({ success: false, message: 'Ruta inválida' });
+  }
+
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/archivos/${encodeURIComponent(folder)}/${encodeURIComponent(filename)}`,
+      {
+        headers: {
+          'x-access': Array.isArray(authToken) ? authToken[0] : authToken
+        },
+        responseType: 'stream',
+        timeout: 30000,
+        validateStatus: () => true
+      }
+    );
+
+    // Si el upstream devolvió error como JSON, propagar status + body legible.
+    if (upstream.status >= 400) {
+      let body = '';
+      for await (const chunk of upstream.data) body += chunk.toString();
+      let parsed: any = { message: body || 'Error en el servidor remoto' };
+      try { parsed = JSON.parse(body); } catch { /* mantener texto */ }
+      return res.status(upstream.status).json({
+        success: false,
+        message: parsed.message || 'Error en el servidor remoto'
+      });
+    }
+
+    if (upstream.headers['content-type']) res.set('Content-Type', upstream.headers['content-type'] as string);
+    if (upstream.headers['content-length']) res.set('Content-Length', upstream.headers['content-length'] as string);
+    if (upstream.headers['cache-control']) res.set('Cache-Control', upstream.headers['cache-control'] as string);
+    res.status(upstream.status);
+    upstream.data.pipe(res);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/archivos/:folder/:filename');
   }
 }));
 
