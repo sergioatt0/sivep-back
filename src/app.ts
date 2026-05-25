@@ -143,6 +143,26 @@ app.get('/', (req: Request, res: Response) => {
         method: "GET",
         path: "/api/archivos/:folder/:filename",
         description: "Descarga binaria de un archivo guardado en SISDEP, requiere token. Stream passthrough."
+      },
+      {
+        method: "GET",
+        path: "/api/dominios/{municipio|comuna|barrio|nomenclaturaVial|orientacion}",
+        description: "Catálogos maestros usados para construir direcciones. Proxy a SISDEP."
+      },
+      {
+        method: "POST",
+        path: "/api/general/direccion/validar",
+        description: "Valida si una dirección ya existe en SISDEP antes de crearla. Devuelve `existe`, `id` y `similares`."
+      },
+      {
+        method: "GET|POST|PATCH",
+        path: "/api/general/direccion[/:id]",
+        description: "CRUD de direcciones estructuradas (intersección de vías + barrio/comuna/municipio + geolocalización)."
+      },
+      {
+        method: "GET",
+        path: "/api/general/direccionCompleta/{paginated|count|excel}",
+        description: "Listado enriquecido de direcciones con nombres de barrio/comuna/municipio resueltos."
       }
     ]
   });
@@ -846,6 +866,182 @@ app.get('/api/archivos/:folder/:filename', asyncHandler(async (req: Request, res
     upstream.data.pipe(res);
   } catch (error: any) {
     handleProxyError(error, res, 'GET /api/archivos/:folder/:filename');
+  }
+}));
+
+// ============================================================
+// Direcciones — proxy a SISDEP
+// Catálogos: municipio, comuna, barrio, nomenclaturaVial, orientacion
+// Core: /api/general/direccion (+ /validar)
+// Vista enriquecida: /api/general/direccionCompleta
+// ============================================================
+
+function proxyGetCatalogo(path: string) {
+  return asyncHandler(async (req: Request, res: Response) => {
+    const authToken = requireToken(req, res);
+    if (!authToken) return;
+    try {
+      const upstream = await axios.get(
+        `${sisdepBaseUrl}${path}`,
+        buildAxiosConfig(authToken, req.query)
+      );
+      res.status(upstream.status).json(upstream.data);
+    } catch (error: any) {
+      handleProxyError(error, res, `GET ${path}`);
+    }
+  });
+}
+
+app.get('/api/dominios/municipio', proxyGetCatalogo('/api/dominios/municipio'));
+app.get('/api/dominios/comuna', proxyGetCatalogo('/api/dominios/comuna'));
+app.get('/api/dominios/barrio', proxyGetCatalogo('/api/dominios/barrio'));
+app.get('/api/dominios/nomenclaturaVial', proxyGetCatalogo('/api/dominios/nomenclaturaVial'));
+app.get('/api/dominios/orientacion', proxyGetCatalogo('/api/dominios/orientacion'));
+
+// --- Direccion core ---
+
+app.post('/api/general/direccion/validar', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.post(
+      `${sisdepBaseUrl}/api/general/direccion/validar`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'POST /api/general/direccion/validar');
+  }
+}));
+
+app.post('/api/general/direccion', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.post(
+      `${sisdepBaseUrl}/api/general/direccion`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'POST /api/general/direccion');
+  }
+}));
+
+app.get('/api/general/direccion', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/general/direccion`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/general/direccion');
+  }
+}));
+
+app.get('/api/general/direccion/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/general/direccion/${id}`,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/general/direccion/:id');
+  }
+}));
+
+app.patch('/api/general/direccion/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.patch(
+      `${sisdepBaseUrl}/api/general/direccion/${id}`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'PATCH /api/general/direccion/:id');
+  }
+}));
+
+// --- direccionCompleta (vista) ---
+
+app.get('/api/general/direccionCompleta/paginated', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/general/direccionCompleta/paginated`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/general/direccionCompleta/paginated');
+  }
+}));
+
+app.get('/api/general/direccionCompleta/count', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/general/direccionCompleta/count`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/general/direccionCompleta/count');
+  }
+}));
+
+app.get('/api/general/direccionCompleta/excel', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/general/direccionCompleta/excel`,
+      {
+        headers: {
+          'x-access': Array.isArray(authToken) ? authToken[0] : authToken
+        },
+        params: req.query,
+        responseType: 'stream',
+        timeout: 60000,
+        validateStatus: () => true
+      }
+    );
+
+    if (upstream.status >= 400) {
+      let body = '';
+      for await (const chunk of upstream.data) body += chunk.toString();
+      let parsed: any = { message: body || 'Error en el servidor remoto' };
+      try { parsed = JSON.parse(body); } catch { /* texto plano */ }
+      return res.status(upstream.status).json({
+        success: false,
+        message: parsed.message || 'Error en el servidor remoto'
+      });
+    }
+
+    if (upstream.headers['content-type']) res.set('Content-Type', upstream.headers['content-type'] as string);
+    if (upstream.headers['content-length']) res.set('Content-Length', upstream.headers['content-length'] as string);
+    if (upstream.headers['content-disposition']) res.set('Content-Disposition', upstream.headers['content-disposition'] as string);
+    res.status(upstream.status);
+    upstream.data.pipe(res);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/general/direccionCompleta/excel');
   }
 }));
 
