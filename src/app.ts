@@ -126,42 +126,42 @@ app.get('/', (req: Request, res: Response) => {
       },
       {
         method: "GET|POST|PATCH|DELETE",
-        path: "/api/dominios/tipoReporteSivep[/:id]",
+        path: "/dominios/tipoReporteSivep[/:id]",
         description: "CRUD del catálogo de prioridades de Reporte SIVEP (1=Grave, 2=Media, 3=Baja, 4=En prioridad). Proxy a SISDEP."
       },
       {
         method: "GET|POST|PATCH|DELETE",
-        path: "/api/social/reporteSivep[/:id]",
+        path: "/social/reporteSivep[/:id]",
         description: "CRUD de reportes SIVEP sobre venteros. Incluye GET /paginated con query params estándar. Proxy a SISDEP."
       },
       {
         method: "POST",
-        path: "/api/archivos",
+        path: "/archivos",
         description: "Sube foto/firma a SISDEP (multipart con partes 'info' y 'file'). Devuelve { archivos: [{ id, fullPath, ... }] }."
       },
       {
         method: "GET",
-        path: "/api/archivos/:folder/:filename",
+        path: "/archivos/:folder/:filename",
         description: "Descarga binaria de un archivo guardado en SISDEP, requiere token. Stream passthrough."
       },
       {
         method: "GET",
-        path: "/api/dominios/{municipio|comuna|barrio|nomenclaturaVial|orientacion}",
+        path: "/dominios/{municipio|comuna|barrio|nomenclaturaVial|orientacion}",
         description: "Catálogos maestros usados para construir direcciones. Proxy a SISDEP."
       },
       {
         method: "POST",
-        path: "/api/general/direccion/validar",
+        path: "/general/direccion/validar",
         description: "Valida si una dirección ya existe en SISDEP antes de crearla. Devuelve `existe`, `id` y `similares`."
       },
       {
         method: "GET|POST|PATCH",
-        path: "/api/general/direccion[/:id]",
+        path: "/general/direccion[/:id]",
         description: "CRUD de direcciones estructuradas (intersección de vías + barrio/comuna/municipio + geolocalización)."
       },
       {
         method: "GET",
-        path: "/api/general/direccionCompleta/{paginated|count|excel}",
+        path: "/general/direccionCompleta/{paginated|count|excel}",
         description: "Listado enriquecido de direcciones con nombres de barrio/comuna/municipio resueltos."
       }
     ]
@@ -607,7 +607,7 @@ function requireNumericId(req: Request, res: Response): string | null {
 
 // --- Dominio: tipoReporteSivep ---
 
-app.get('/api/dominios/tipoReporteSivep', asyncHandler(async (req: Request, res: Response) => {
+app.get('/dominios/tipoReporteSivep', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   try {
@@ -621,7 +621,7 @@ app.get('/api/dominios/tipoReporteSivep', asyncHandler(async (req: Request, res:
   }
 }));
 
-app.get('/api/dominios/tipoReporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
+app.get('/dominios/tipoReporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   const id = requireNumericId(req, res);
@@ -637,7 +637,7 @@ app.get('/api/dominios/tipoReporteSivep/:id', asyncHandler(async (req: Request, 
   }
 }));
 
-app.post('/api/dominios/tipoReporteSivep', asyncHandler(async (req: Request, res: Response) => {
+app.post('/dominios/tipoReporteSivep', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   try {
@@ -652,7 +652,7 @@ app.post('/api/dominios/tipoReporteSivep', asyncHandler(async (req: Request, res
   }
 }));
 
-app.patch('/api/dominios/tipoReporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
+app.patch('/dominios/tipoReporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   const id = requireNumericId(req, res);
@@ -669,7 +669,7 @@ app.patch('/api/dominios/tipoReporteSivep/:id', asyncHandler(async (req: Request
   }
 }));
 
-app.delete('/api/dominios/tipoReporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
+app.delete('/dominios/tipoReporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   const id = requireNumericId(req, res);
@@ -689,7 +689,7 @@ app.delete('/api/dominios/tipoReporteSivep/:id', asyncHandler(async (req: Reques
 // IMPORTANTE: /paginated debe registrarse antes que /:id para que Express
 // no capture "paginated" como id dinámico.
 
-app.get('/api/social/reporteSivep/paginated', asyncHandler(async (req: Request, res: Response) => {
+app.get('/social/reporteSivep/paginated', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   try {
@@ -703,7 +703,7 @@ app.get('/api/social/reporteSivep/paginated', asyncHandler(async (req: Request, 
   }
 }));
 
-app.get('/api/social/reporteSivep', asyncHandler(async (req: Request, res: Response) => {
+app.get('/social/reporteSivep', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   try {
@@ -717,7 +717,7 @@ app.get('/api/social/reporteSivep', asyncHandler(async (req: Request, res: Respo
   }
 }));
 
-app.get('/api/social/reporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
+app.get('/social/reporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   const id = requireNumericId(req, res);
@@ -733,7 +733,7 @@ app.get('/api/social/reporteSivep/:id', asyncHandler(async (req: Request, res: R
   }
 }));
 
-app.post('/api/social/reporteSivep', asyncHandler(async (req: Request, res: Response) => {
+app.post('/social/reporteSivep', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   try {
@@ -748,7 +748,7 @@ app.post('/api/social/reporteSivep', asyncHandler(async (req: Request, res: Resp
   }
 }));
 
-app.patch('/api/social/reporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
+app.patch('/social/reporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   const id = requireNumericId(req, res);
@@ -765,7 +765,7 @@ app.patch('/api/social/reporteSivep/:id', asyncHandler(async (req: Request, res:
   }
 }));
 
-app.delete('/api/social/reporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
+app.delete('/social/reporteSivep/:id', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   const id = requireNumericId(req, res);
@@ -789,7 +789,7 @@ app.delete('/api/social/reporteSivep/:id', asyncHandler(async (req: Request, res
 
 // POST: passthrough del stream multipart. NO usar express.json — el body
 // llega como stream binario porque su Content-Type es multipart/form-data.
-app.post('/api/archivos', asyncHandler(async (req: Request, res: Response) => {
+app.post('/archivos', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
 
@@ -823,7 +823,7 @@ app.post('/api/archivos', asyncHandler(async (req: Request, res: Response) => {
 }));
 
 // GET: descarga binaria del archivo guardado. Stream passthrough.
-app.get('/api/archivos/:folder/:filename', asyncHandler(async (req: Request, res: Response) => {
+app.get('/archivos/:folder/:filename', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
 
@@ -892,15 +892,15 @@ function proxyGetCatalogo(path: string) {
   });
 }
 
-app.get('/api/dominios/municipio', proxyGetCatalogo('/api/dominios/municipio'));
-app.get('/api/dominios/comuna', proxyGetCatalogo('/api/dominios/comuna'));
-app.get('/api/dominios/barrio', proxyGetCatalogo('/api/dominios/barrio'));
-app.get('/api/dominios/nomenclaturaVial', proxyGetCatalogo('/api/dominios/nomenclaturaVial'));
-app.get('/api/dominios/orientacion', proxyGetCatalogo('/api/dominios/orientacion'));
+app.get('/dominios/municipio', proxyGetCatalogo('/api/dominios/municipio'));
+app.get('/dominios/comuna', proxyGetCatalogo('/api/dominios/comuna'));
+app.get('/dominios/barrio', proxyGetCatalogo('/api/dominios/barrio'));
+app.get('/dominios/nomenclaturaVial', proxyGetCatalogo('/api/dominios/nomenclaturaVial'));
+app.get('/dominios/orientacion', proxyGetCatalogo('/api/dominios/orientacion'));
 
 // --- Direccion core ---
 
-app.post('/api/general/direccion/validar', asyncHandler(async (req: Request, res: Response) => {
+app.post('/general/direccion/validar', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   try {
@@ -915,7 +915,7 @@ app.post('/api/general/direccion/validar', asyncHandler(async (req: Request, res
   }
 }));
 
-app.post('/api/general/direccion', asyncHandler(async (req: Request, res: Response) => {
+app.post('/general/direccion', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   try {
@@ -930,7 +930,7 @@ app.post('/api/general/direccion', asyncHandler(async (req: Request, res: Respon
   }
 }));
 
-app.get('/api/general/direccion', asyncHandler(async (req: Request, res: Response) => {
+app.get('/general/direccion', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   try {
@@ -944,7 +944,7 @@ app.get('/api/general/direccion', asyncHandler(async (req: Request, res: Respons
   }
 }));
 
-app.get('/api/general/direccion/:id', asyncHandler(async (req: Request, res: Response) => {
+app.get('/general/direccion/:id', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   const id = requireNumericId(req, res);
@@ -960,7 +960,7 @@ app.get('/api/general/direccion/:id', asyncHandler(async (req: Request, res: Res
   }
 }));
 
-app.patch('/api/general/direccion/:id', asyncHandler(async (req: Request, res: Response) => {
+app.patch('/general/direccion/:id', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   const id = requireNumericId(req, res);
@@ -979,7 +979,7 @@ app.patch('/api/general/direccion/:id', asyncHandler(async (req: Request, res: R
 
 // --- direccionCompleta (vista) ---
 
-app.get('/api/general/direccionCompleta/paginated', asyncHandler(async (req: Request, res: Response) => {
+app.get('/general/direccionCompleta/paginated', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   try {
@@ -993,7 +993,7 @@ app.get('/api/general/direccionCompleta/paginated', asyncHandler(async (req: Req
   }
 }));
 
-app.get('/api/general/direccionCompleta/count', asyncHandler(async (req: Request, res: Response) => {
+app.get('/general/direccionCompleta/count', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   try {
@@ -1007,7 +1007,7 @@ app.get('/api/general/direccionCompleta/count', asyncHandler(async (req: Request
   }
 }));
 
-app.get('/api/general/direccionCompleta/excel', asyncHandler(async (req: Request, res: Response) => {
+app.get('/general/direccionCompleta/excel', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
   try {
