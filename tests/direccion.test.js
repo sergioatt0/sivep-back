@@ -197,7 +197,7 @@ describe('Dirección proxy', () => {
   describe('GET /api/dominios/* (catálogos)', () => {
     for (const cat of ['municipio', 'comuna', 'barrio', 'nomenclaturaVial', 'orientacion']) {
       test(`200 ${cat}`, async () => {
-        const { status, body } = await rawHttp(appPort, 'GET', `/api/dominios/${cat}`, { 'x-access': 'tok' });
+        const { status, body } = await rawHttp(appPort, 'GET', `/dominios/${cat}`, { 'x-access': 'tok' });
         assert.equal(status, 200);
         assert.ok(Array.isArray(body));
         assert.ok(body[0].id);
@@ -206,14 +206,14 @@ describe('Dirección proxy', () => {
     }
 
     test('401 sin x-access (municipio)', async () => {
-      const { status, body } = await rawHttp(appPort, 'GET', '/api/dominios/municipio', {});
+      const { status, body } = await rawHttp(appPort, 'GET', '/dominios/municipio', {});
       assert.equal(status, 401);
       assert.equal(body.success, false);
     });
 
     test('query params se reenvían al upstream (comuna?idMunicipio=1)', async () => {
       sisdep.clearRequests();
-      await rawHttp(appPort, 'GET', '/api/dominios/comuna?idMunicipio=1', { 'x-access': 'tok' });
+      await rawHttp(appPort, 'GET', '/dominios/comuna?idMunicipio=1', { 'x-access': 'tok' });
       const last = sisdep.requests.at(-1);
       assert.match(last.path, /idMunicipio=1/);
     });
@@ -223,7 +223,7 @@ describe('Dirección proxy', () => {
   describe('POST /api/general/direccion/validar', () => {
     test('200 cuando no existe ni hay similares', async () => {
       sisdep.setMode('ok');
-      const { status, body } = await rawHttp(appPort, 'POST', '/api/general/direccion/validar',
+      const { status, body } = await rawHttp(appPort, 'POST', '/general/direccion/validar',
         { 'x-access': 'tok' },
         { cruceDesde: 1, numeroDesde: 50, cruceHasta: 2, numeroHasta: 30, idMunicipio: 1 }
       );
@@ -235,7 +235,7 @@ describe('Dirección proxy', () => {
 
     test('200 existe=true devuelve id reusable', async () => {
       sisdep.setMode('validar-existe');
-      const { status, body } = await rawHttp(appPort, 'POST', '/api/general/direccion/validar',
+      const { status, body } = await rawHttp(appPort, 'POST', '/general/direccion/validar',
         { 'x-access': 'tok' },
         { cruceDesde: 1, numeroDesde: 50, cruceHasta: 2, numeroHasta: 30, idMunicipio: 1 }
       );
@@ -246,7 +246,7 @@ describe('Dirección proxy', () => {
 
     test('200 con similares lista candidates con campo diferencia', async () => {
       sisdep.setMode('validar-similares');
-      const { status, body } = await rawHttp(appPort, 'POST', '/api/general/direccion/validar',
+      const { status, body } = await rawHttp(appPort, 'POST', '/general/direccion/validar',
         { 'x-access': 'tok' },
         { cruceDesde: 1, numeroDesde: 50, cruceHasta: 2, numeroHasta: 30, idMunicipio: 1 }
       );
@@ -257,7 +257,7 @@ describe('Dirección proxy', () => {
     });
 
     test('401 sin x-access', async () => {
-      const { status } = await rawHttp(appPort, 'POST', '/api/general/direccion/validar', {}, { cruceDesde: 1 });
+      const { status } = await rawHttp(appPort, 'POST', '/general/direccion/validar', {}, { cruceDesde: 1 });
       assert.equal(status, 401);
     });
 
@@ -265,7 +265,7 @@ describe('Dirección proxy', () => {
       sisdep.setMode('ok');
       sisdep.clearRequests();
       const payload = { cruceDesde: 1, numeroDesde: 50, cruceHasta: 2, numeroHasta: 30, idMunicipio: 1, idComuna: 10, idBarrio: 105 };
-      await rawHttp(appPort, 'POST', '/api/general/direccion/validar', { 'x-access': 'tok' }, payload);
+      await rawHttp(appPort, 'POST', '/general/direccion/validar', { 'x-access': 'tok' }, payload);
       const last = sisdep.requests.at(-1);
       assert.equal(last.method, 'POST');
       assert.equal(last.path, '/api/general/direccion/validar');
@@ -283,7 +283,7 @@ describe('Dirección proxy', () => {
         idMunicipio: 1, idComuna: 10, idBarrio: 105,
         localizacion: { type: 'Point', coordinates: [-75.5814, 6.2476] }
       };
-      const { status, body } = await rawHttp(appPort, 'POST', '/api/general/direccion', { 'x-access': 'tok' }, payload);
+      const { status, body } = await rawHttp(appPort, 'POST', '/general/direccion', { 'x-access': 'tok' }, payload);
       assert.equal(status, 200);
       assert.ok(body.id);
       assert.equal(body.complemento, 'Apto 301');
@@ -292,7 +292,7 @@ describe('Dirección proxy', () => {
 
     test('propaga 409 cuando hay duplicado upstream', async () => {
       sisdep.setMode('create-409');
-      const { status, body } = await rawHttp(appPort, 'POST', '/api/general/direccion',
+      const { status, body } = await rawHttp(appPort, 'POST', '/general/direccion',
         { 'x-access': 'tok' }, { cruceDesde: 1, numeroDesde: 50, cruceHasta: 2, numeroHasta: 30, idMunicipio: 1 }
       );
       assert.equal(status, 409);
@@ -301,7 +301,7 @@ describe('Dirección proxy', () => {
     });
 
     test('401 sin x-access', async () => {
-      const { status } = await rawHttp(appPort, 'POST', '/api/general/direccion', {}, { cruceDesde: 1 });
+      const { status } = await rawHttp(appPort, 'POST', '/general/direccion', {}, { cruceDesde: 1 });
       assert.equal(status, 401);
     });
   });
@@ -310,7 +310,7 @@ describe('Dirección proxy', () => {
   describe('GET /api/general/direccion', () => {
     test('200 lista', async () => {
       sisdep.setMode('ok');
-      const { status, body } = await rawHttp(appPort, 'GET', '/api/general/direccion', { 'x-access': 'tok' });
+      const { status, body } = await rawHttp(appPort, 'GET', '/general/direccion', { 'x-access': 'tok' });
       assert.equal(status, 200);
       assert.ok(Array.isArray(body));
       assert.equal(body[0].id, DIRECCION_FIXTURE.id);
@@ -319,7 +319,7 @@ describe('Dirección proxy', () => {
     test('200 con ?enUso=true reenviado al upstream', async () => {
       sisdep.setMode('ok');
       sisdep.clearRequests();
-      await rawHttp(appPort, 'GET', '/api/general/direccion?enUso=true', { 'x-access': 'tok' });
+      await rawHttp(appPort, 'GET', '/general/direccion?enUso=true', { 'x-access': 'tok' });
       const last = sisdep.requests.at(-1);
       assert.match(last.path, /enUso=true/);
     });
@@ -328,13 +328,13 @@ describe('Dirección proxy', () => {
   describe('GET /api/general/direccion/:id', () => {
     test('200 detalle', async () => {
       sisdep.setMode('ok');
-      const { status, body } = await rawHttp(appPort, 'GET', '/api/general/direccion/77', { 'x-access': 'tok' });
+      const { status, body } = await rawHttp(appPort, 'GET', '/general/direccion/77', { 'x-access': 'tok' });
       assert.equal(status, 200);
       assert.equal(body.id, 77);
     });
 
     test('400 id no numérico', async () => {
-      const { status, body } = await rawHttp(appPort, 'GET', '/api/general/direccion/abc', { 'x-access': 'tok' });
+      const { status, body } = await rawHttp(appPort, 'GET', '/general/direccion/abc', { 'x-access': 'tok' });
       assert.equal(status, 400);
       assert.match(body.message, /ID inválido/);
     });
@@ -343,14 +343,14 @@ describe('Dirección proxy', () => {
   describe('PATCH /api/general/direccion/:id', () => {
     test('200 actualiza y reenvía body', async () => {
       sisdep.setMode('ok');
-      const { status, body } = await rawHttp(appPort, 'PATCH', '/api/general/direccion/5', { 'x-access': 'tok' }, { complemento: 'Casa 2' });
+      const { status, body } = await rawHttp(appPort, 'PATCH', '/general/direccion/5', { 'x-access': 'tok' }, { complemento: 'Casa 2' });
       assert.equal(status, 200);
       assert.equal(body.id, 5);
       assert.equal(body.complemento, 'Casa 2');
     });
 
     test('400 con id no numérico', async () => {
-      const { status } = await rawHttp(appPort, 'PATCH', '/api/general/direccion/abc', { 'x-access': 'tok' }, { complemento: 'X' });
+      const { status } = await rawHttp(appPort, 'PATCH', '/general/direccion/abc', { 'x-access': 'tok' }, { complemento: 'X' });
       assert.equal(status, 400);
     });
   });
@@ -361,7 +361,7 @@ describe('Dirección proxy', () => {
       sisdep.setMode('ok');
       sisdep.clearRequests();
       const { status, body } = await rawHttp(appPort, 'GET',
-        '/api/general/direccionCompleta/paginated?page=0&size=10', { 'x-access': 'tok' });
+        '/general/direccionCompleta/paginated?page=0&size=10', { 'x-access': 'tok' });
       assert.equal(status, 200);
       assert.equal(body.totalCount, 1);
       assert.equal(body.entities[0].municipio, 'Medellín');
@@ -373,7 +373,7 @@ describe('Dirección proxy', () => {
     test('200 count', async () => {
       sisdep.setMode('ok');
       const { status, body } = await rawHttp(appPort, 'GET',
-        '/api/general/direccionCompleta/count', { 'x-access': 'tok' });
+        '/general/direccionCompleta/count', { 'x-access': 'tok' });
       assert.equal(status, 200);
       assert.equal(body.count, 1);
     });
@@ -381,7 +381,7 @@ describe('Dirección proxy', () => {
     test('200 excel sirve binario con content-disposition', async () => {
       sisdep.setMode('ok');
       const { status, headers, raw } = await rawHttp(appPort, 'GET',
-        '/api/general/direccionCompleta/excel', { 'x-access': 'tok' });
+        '/general/direccionCompleta/excel', { 'x-access': 'tok' });
       assert.equal(status, 200);
       assert.match(headers['content-type'], /spreadsheetml\.sheet/);
       assert.match(headers['content-disposition'], /direcciones\.xlsx/);
@@ -393,7 +393,7 @@ describe('Dirección proxy', () => {
     test('excel propaga error como JSON', async () => {
       sisdep.setMode('excel-error');
       const { status, body } = await rawHttp(appPort, 'GET',
-        '/api/general/direccionCompleta/excel', { 'x-access': 'tok' });
+        '/general/direccionCompleta/excel', { 'x-access': 'tok' });
       assert.equal(status, 500);
       assert.equal(body.success, false);
       assert.match(body.message, /No se pudo generar/);
@@ -401,7 +401,7 @@ describe('Dirección proxy', () => {
 
     test('401 sin x-access (paginated)', async () => {
       const { status } = await rawHttp(appPort, 'GET',
-        '/api/general/direccionCompleta/paginated', {});
+        '/general/direccionCompleta/paginated', {});
       assert.equal(status, 401);
     });
   });

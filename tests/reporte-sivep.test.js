@@ -197,7 +197,7 @@ describe('Reporte SIVEP proxy', () => {
   describe('GET /api/dominios/tipoReporteSivep', () => {
     test('200 retorna catálogo', async () => {
       sisdep.setMode('ok');
-      const { status, body } = await httpRequest(appPort, 'GET', '/api/dominios/tipoReporteSivep', { 'x-access': 'tok' });
+      const { status, body } = await httpRequest(appPort, 'GET', '/dominios/tipoReporteSivep', { 'x-access': 'tok' });
       assert.equal(status, 200);
       assert.equal(body.length, 4);
       assert.equal(body[0].descripcion, 'Grave');
@@ -205,14 +205,14 @@ describe('Reporte SIVEP proxy', () => {
 
     test('401 sin x-access', async () => {
       sisdep.setMode('ok');
-      const { status, body } = await httpRequest(appPort, 'GET', '/api/dominios/tipoReporteSivep');
+      const { status, body } = await httpRequest(appPort, 'GET', '/dominios/tipoReporteSivep');
       assert.equal(status, 401);
       assert.equal(body.success, false);
     });
 
     test('propaga 500 del upstream', async () => {
       sisdep.setMode('500');
-      const { status, body } = await httpRequest(appPort, 'GET', '/api/dominios/tipoReporteSivep', { 'x-access': 'tok' });
+      const { status, body } = await httpRequest(appPort, 'GET', '/dominios/tipoReporteSivep', { 'x-access': 'tok' });
       assert.equal(status, 500);
       assert.equal(body.success, false);
     });
@@ -221,7 +221,7 @@ describe('Reporte SIVEP proxy', () => {
   describe('GET /api/dominios/tipoReporteSivep/:id', () => {
     test('200 retorna item', async () => {
       sisdep.setMode('ok');
-      const { status, body } = await httpRequest(appPort, 'GET', '/api/dominios/tipoReporteSivep/2', { 'x-access': 'tok' });
+      const { status, body } = await httpRequest(appPort, 'GET', '/dominios/tipoReporteSivep/2', { 'x-access': 'tok' });
       assert.equal(status, 200);
       assert.equal(body.id, 2);
       assert.equal(body.descripcion, 'Media');
@@ -229,14 +229,14 @@ describe('Reporte SIVEP proxy', () => {
 
     test('400 con id no numérico', async () => {
       sisdep.setMode('ok');
-      const { status, body } = await httpRequest(appPort, 'GET', '/api/dominios/tipoReporteSivep/abc', { 'x-access': 'tok' });
+      const { status, body } = await httpRequest(appPort, 'GET', '/dominios/tipoReporteSivep/abc', { 'x-access': 'tok' });
       assert.equal(status, 400);
       assert.match(body.message, /ID inválido/);
     });
 
     test('propaga 404 cuando id no existe en upstream', async () => {
       sisdep.setMode('ok');
-      const { status } = await httpRequest(appPort, 'GET', '/api/dominios/tipoReporteSivep/9999', { 'x-access': 'tok' });
+      const { status } = await httpRequest(appPort, 'GET', '/dominios/tipoReporteSivep/9999', { 'x-access': 'tok' });
       assert.equal(status, 404);
     });
   });
@@ -246,7 +246,7 @@ describe('Reporte SIVEP proxy', () => {
       sisdep.setMode('ok');
       sisdep.clearRequests();
       const payload = { descripcion: 'Urgente' };
-      const { status, body } = await httpRequest(appPort, 'POST', '/api/dominios/tipoReporteSivep', { 'x-access': 'tok' }, payload);
+      const { status, body } = await httpRequest(appPort, 'POST', '/dominios/tipoReporteSivep', { 'x-access': 'tok' }, payload);
       assert.equal(status, 201);
       assert.equal(body.descripcion, 'Urgente');
       // upstream recibió el body
@@ -260,14 +260,14 @@ describe('Reporte SIVEP proxy', () => {
   describe('PATCH /api/dominios/tipoReporteSivep/:id', () => {
     test('200 actualiza y reenvía body', async () => {
       sisdep.setMode('ok');
-      const { status, body } = await httpRequest(appPort, 'PATCH', '/api/dominios/tipoReporteSivep/3', { 'x-access': 'tok' }, { descripcion: 'Baja*' });
+      const { status, body } = await httpRequest(appPort, 'PATCH', '/dominios/tipoReporteSivep/3', { 'x-access': 'tok' }, { descripcion: 'Baja*' });
       assert.equal(status, 200);
       assert.equal(body.id, 3);
       assert.equal(body.descripcion, 'Baja*');
     });
 
     test('400 con id no numérico', async () => {
-      const { status } = await httpRequest(appPort, 'PATCH', '/api/dominios/tipoReporteSivep/xyz', { 'x-access': 'tok' }, { descripcion: 'X' });
+      const { status } = await httpRequest(appPort, 'PATCH', '/dominios/tipoReporteSivep/xyz', { 'x-access': 'tok' }, { descripcion: 'X' });
       assert.equal(status, 400);
     });
   });
@@ -275,12 +275,12 @@ describe('Reporte SIVEP proxy', () => {
   describe('DELETE /api/dominios/tipoReporteSivep/:id', () => {
     test('204 elimina (devuelve fallback JSON cuando upstream no manda body)', async () => {
       sisdep.setMode('ok');
-      const { status } = await httpRequest(appPort, 'DELETE', '/api/dominios/tipoReporteSivep/4', { 'x-access': 'tok' });
+      const { status } = await httpRequest(appPort, 'DELETE', '/dominios/tipoReporteSivep/4', { 'x-access': 'tok' });
       assert.equal(status, 204);
     });
 
     test('401 sin x-access', async () => {
-      const { status } = await httpRequest(appPort, 'DELETE', '/api/dominios/tipoReporteSivep/4');
+      const { status } = await httpRequest(appPort, 'DELETE', '/dominios/tipoReporteSivep/4');
       assert.equal(status, 401);
     });
   });
@@ -289,7 +289,7 @@ describe('Reporte SIVEP proxy', () => {
   describe('GET /api/social/reporteSivep', () => {
     test('200 retorna lista', async () => {
       sisdep.setMode('ok');
-      const { status, body } = await httpRequest(appPort, 'GET', '/api/social/reporteSivep', { 'x-access': 'tok' });
+      const { status, body } = await httpRequest(appPort, 'GET', '/social/reporteSivep', { 'x-access': 'tok' });
       assert.equal(status, 200);
       assert.ok(Array.isArray(body));
       assert.equal(body[0].direccionReporte, 'Cra 50 # 30 - 10');
@@ -300,7 +300,7 @@ describe('Reporte SIVEP proxy', () => {
     test('200 con query params reenviados al upstream', async () => {
       sisdep.setMode('ok');
       sisdep.clearRequests();
-      const { status, body } = await httpRequest(appPort, 'GET', '/api/social/reporteSivep/paginated?page=0&size=10&sort=id,desc', { 'x-access': 'tok' });
+      const { status, body } = await httpRequest(appPort, 'GET', '/social/reporteSivep/paginated?page=0&size=10&sort=id,desc', { 'x-access': 'tok' });
       assert.equal(status, 200);
       assert.equal(body.totalElements, 1);
       // El mock recibe los query params tal cual
@@ -314,7 +314,7 @@ describe('Reporte SIVEP proxy', () => {
     test('NO se confunde con la ruta /:id (registro de /paginated va primero)', async () => {
       sisdep.setMode('ok');
       sisdep.clearRequests();
-      const { status } = await httpRequest(appPort, 'GET', '/api/social/reporteSivep/paginated', { 'x-access': 'tok' });
+      const { status } = await httpRequest(appPort, 'GET', '/social/reporteSivep/paginated', { 'x-access': 'tok' });
       assert.equal(status, 200);
       const last = sisdep.requests.at(-1);
       assert.equal(last.path.split('?')[0], '/api/social/reporteSivep/paginated');
@@ -324,14 +324,14 @@ describe('Reporte SIVEP proxy', () => {
   describe('GET /api/social/reporteSivep/:id', () => {
     test('200 retorna reporte con id solicitado', async () => {
       sisdep.setMode('ok');
-      const { status, body } = await httpRequest(appPort, 'GET', '/api/social/reporteSivep/77', { 'x-access': 'tok' });
+      const { status, body } = await httpRequest(appPort, 'GET', '/social/reporteSivep/77', { 'x-access': 'tok' });
       assert.equal(status, 200);
       assert.equal(body.id, 77);
       assert.equal(body.idTipoReporteSivep, 1);
     });
 
     test('400 con id no numérico', async () => {
-      const { status } = await httpRequest(appPort, 'GET', '/api/social/reporteSivep/abc', { 'x-access': 'tok' });
+      const { status } = await httpRequest(appPort, 'GET', '/social/reporteSivep/abc', { 'x-access': 'tok' });
       assert.equal(status, 400);
     });
   });
@@ -348,7 +348,7 @@ describe('Reporte SIVEP proxy', () => {
         enlaceFotografia: 'https://example/x.jpg',
         enlaceFirma: 'https://example/y.png'
       };
-      const { status, body } = await httpRequest(appPort, 'POST', '/api/social/reporteSivep', { 'x-access': 'tok' }, payload);
+      const { status, body } = await httpRequest(appPort, 'POST', '/social/reporteSivep', { 'x-access': 'tok' }, payload);
       assert.equal(status, 201);
       assert.equal(body.id, 999);
       assert.equal(body.direccionReporte, 'Cl 10 # 20-30');
@@ -359,7 +359,7 @@ describe('Reporte SIVEP proxy', () => {
 
     test('propaga 401 del upstream cuando token es rechazado', async () => {
       sisdep.setMode('auth-fail');
-      const { status } = await httpRequest(appPort, 'POST', '/api/social/reporteSivep', { 'x-access': 'tok-malo' }, { direccionReporte: 'x' });
+      const { status } = await httpRequest(appPort, 'POST', '/social/reporteSivep', { 'x-access': 'tok-malo' }, { direccionReporte: 'x' });
       assert.equal(status, 401);
     });
   });
@@ -367,7 +367,7 @@ describe('Reporte SIVEP proxy', () => {
   describe('PATCH /api/social/reporteSivep/:id', () => {
     test('200 actualiza y reenvía body', async () => {
       sisdep.setMode('ok');
-      const { status, body } = await httpRequest(appPort, 'PATCH', '/api/social/reporteSivep/5', { 'x-access': 'tok' }, { idTipoReporteSivep: 3 });
+      const { status, body } = await httpRequest(appPort, 'PATCH', '/social/reporteSivep/5', { 'x-access': 'tok' }, { idTipoReporteSivep: 3 });
       assert.equal(status, 200);
       assert.equal(body.id, 5);
       assert.equal(body.idTipoReporteSivep, 3);
@@ -377,12 +377,12 @@ describe('Reporte SIVEP proxy', () => {
   describe('DELETE /api/social/reporteSivep/:id', () => {
     test('204 elimina', async () => {
       sisdep.setMode('ok');
-      const { status } = await httpRequest(appPort, 'DELETE', '/api/social/reporteSivep/5', { 'x-access': 'tok' });
+      const { status } = await httpRequest(appPort, 'DELETE', '/social/reporteSivep/5', { 'x-access': 'tok' });
       assert.equal(status, 204);
     });
 
     test('400 con id no numérico', async () => {
-      const { status } = await httpRequest(appPort, 'DELETE', '/api/social/reporteSivep/abc', { 'x-access': 'tok' });
+      const { status } = await httpRequest(appPort, 'DELETE', '/social/reporteSivep/abc', { 'x-access': 'tok' });
       assert.equal(status, 400);
     });
   });

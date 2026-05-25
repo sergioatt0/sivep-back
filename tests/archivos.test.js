@@ -161,7 +161,7 @@ describe('Archivos proxy', () => {
         modulo: 'ReporteSivep', observacion: 'Firma test'
       };
       const mp = makeMultipart(info, FAKE_PNG);
-      const { status, body } = await rawHttp(appPort, 'POST', '/api/archivos',
+      const { status, body } = await rawHttp(appPort, 'POST', '/archivos',
         { 'x-access': 'tok', 'content-type': mp.contentType, 'content-length': mp.body.length },
         mp.body
       );
@@ -182,7 +182,7 @@ describe('Archivos proxy', () => {
 
     test('401 sin x-access', async () => {
       const mp = makeMultipart({ folder: 'Social' }, FAKE_PNG);
-      const { status, body } = await rawHttp(appPort, 'POST', '/api/archivos',
+      const { status, body } = await rawHttp(appPort, 'POST', '/archivos',
         { 'content-type': mp.contentType, 'content-length': mp.body.length },
         mp.body
       );
@@ -191,7 +191,7 @@ describe('Archivos proxy', () => {
     });
 
     test('400 cuando Content-Type no es multipart', async () => {
-      const { status, body } = await rawHttp(appPort, 'POST', '/api/archivos',
+      const { status, body } = await rawHttp(appPort, 'POST', '/archivos',
         { 'x-access': 'tok', 'content-type': 'application/json', 'content-length': 2 },
         Buffer.from('{}')
       );
@@ -202,7 +202,7 @@ describe('Archivos proxy', () => {
     test('propaga 500 del upstream', async () => {
       sisdep.setMode('upload-500');
       const mp = makeMultipart({ folder: 'Social' }, FAKE_PNG);
-      const { status, body } = await rawHttp(appPort, 'POST', '/api/archivos',
+      const { status, body } = await rawHttp(appPort, 'POST', '/archivos',
         { 'x-access': 'tok', 'content-type': mp.contentType, 'content-length': mp.body.length },
         mp.body
       );
@@ -215,7 +215,7 @@ describe('Archivos proxy', () => {
   describe('GET /api/archivos/:folder/:filename', () => {
     test('200 sirve el binario con content-type del upstream', async () => {
       sisdep.setMode('ok');
-      const { status, headers, raw } = await rawHttp(appPort, 'GET', '/api/archivos/Social/1716578432123.png',
+      const { status, headers, raw } = await rawHttp(appPort, 'GET', '/archivos/Social/1716578432123.png',
         { 'x-access': 'tok' }
       );
       assert.equal(status, 200);
@@ -225,14 +225,14 @@ describe('Archivos proxy', () => {
     });
 
     test('401 sin x-access', async () => {
-      const { status, body } = await rawHttp(appPort, 'GET', '/api/archivos/Social/x.png', {});
+      const { status, body } = await rawHttp(appPort, 'GET', '/archivos/Social/x.png', {});
       assert.equal(status, 401);
       assert.equal(body.success, false);
     });
 
     test('400 con path traversal en filename', async () => {
       const { status, body } = await rawHttp(appPort, 'GET',
-        '/api/archivos/Social/' + encodeURIComponent('..%2F..%2Fetc%2Fpasswd'),
+        '/archivos/Social/' + encodeURIComponent('..%2F..%2Fetc%2Fpasswd'),
         { 'x-access': 'tok' }
       );
       // El doble encoding deja '..' literal en filename → debe bloquearse
@@ -242,7 +242,7 @@ describe('Archivos proxy', () => {
 
     test('propaga 404 cuando el archivo no existe en upstream', async () => {
       sisdep.setMode('not-found');
-      const { status, body } = await rawHttp(appPort, 'GET', '/api/archivos/Social/inexistente.png',
+      const { status, body } = await rawHttp(appPort, 'GET', '/archivos/Social/inexistente.png',
         { 'x-access': 'tok' }
       );
       assert.equal(status, 404);
