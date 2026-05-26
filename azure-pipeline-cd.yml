@@ -38,10 +38,10 @@ stages:
                 set -e
 
                 echo "===> Login to ECR"
-                aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(REGISTRY) 2>/dev/null
+                aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(REGISTRY) 2>&1
 
                 echo "===> Pulling image"
-                docker pull $(REGISTRY)/sivep-back:${{ parameters.tag }} 2>/dev/null
+                docker pull $(REGISTRY)/sivep-back:${{ parameters.tag }} 2>&1
 
                 echo "===> Updating service"
                 docker service update --force --with-registry-auth --image $(REGISTRY)/sivep-back:${{ parameters.tag }} sivep-uat_back
@@ -91,10 +91,10 @@ stages:
                 set -e
 
                 echo "===> Login to ECR"
-                aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(REGISTRY) 2>/dev/null
+                aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(REGISTRY) 2>&1
 
                 echo "===> Pulling image"
-                docker pull $(REGISTRY)/sivep-back:${{ parameters.tag }} 2>/dev/null
+                docker pull $(REGISTRY)/sivep-back:${{ parameters.tag }} 2>&1
 
                 echo "===> Updating service"
                 docker service update --force --with-registry-auth --image $(REGISTRY)/sivep-back:${{ parameters.tag }} sivep-qa_back
@@ -144,10 +144,10 @@ stages:
                 set -e
 
                 echo "===> Login to ECR"
-                aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(REGISTRY) 2>/dev/null
+                aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(REGISTRY) 2>&1
 
                 echo "===> Pulling image"
-                docker pull $(REGISTRY)/sivep-back:${{ parameters.tag }} 2>/dev/null
+                docker pull $(REGISTRY)/sivep-back:${{ parameters.tag }} 2>&1
 
                 echo "===> Updating service"
                 docker service update --force --with-registry-auth --image $(REGISTRY)/sivep-back:${{ parameters.tag }} sivep_back
