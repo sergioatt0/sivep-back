@@ -163,6 +163,11 @@ app.get('/', (req: Request, res: Response) => {
         method: "GET",
         path: "/general/direccionCompleta/{paginated|count|excel}",
         description: "Listado enriquecido de direcciones con nombres de barrio/comuna/municipio resueltos."
+      },
+      {
+        method: "GET",
+        path: "/regulaciones/autorizacion",
+        description: "Busca autorizaciones (con datos del ventero) por radicado mercurio. Filtros por query params: ?radicadoMercurio= (exacto), ?contains= (parcial), ?documento=, ?fechaInicial__gte=. Proxy a la vista SolicitudAutorizacionReporte de SISDEP."
       }
     ]
   });
@@ -778,6 +783,32 @@ app.delete('/social/reporteSivep/:id', asyncHandler(async (req: Request, res: Re
     res.status(upstream.status).json(upstream.data ?? { success: true });
   } catch (error: any) {
     handleProxyError(error, res, 'DELETE /api/social/reporteSivep/:id');
+  }
+}));
+
+// ============================================================
+// Regulaciones — Autorizaciones (vista de reporte) — proxy a SISDEP
+// Permite buscar autorizaciones por radicado mercurio del ventero.
+// La vista ya trae los datos del ventero (nombres, apellidos, documento)
+// junto al radicadoMercurio, motivo, fechas y dirección.
+// Filtros vía query params (los resuelve el GenericController en SISDEP):
+//   ?radicadoMercurio=2024-123   → coincidencia exacta
+//   ?contains=2024               → búsqueda parcial (ILIKE en campos texto)
+//   ?documento=10203040          → autorizaciones de un ventero
+//   ?fechaInicial__gte=2026-01-01T00:00:00 → operadores de rango
+// ============================================================
+
+app.get('/regulaciones/autorizacion', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/regulaciones/reportes/SolicitudAutorizacionReporte`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/regulaciones/reportes/SolicitudAutorizacionReporte');
   }
 }));
 
