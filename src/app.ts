@@ -58,10 +58,25 @@ const port = isProduction ? Number(process.env.PORT) || 8080 : 5001;
 
 const sisdepBaseUrl = (process.env.SISDEP_BASE_URL || 'https://www.medellin.gov.co/sisdep/back').replace(/\/+$/, '');
 
-const imageAllowedOrigins = (process.env.IMAGE_ALLOWED_ORIGINS || 'https://www.medellin.gov.co,https://medellin.gov.co')
-  .split(',')
-  .map(origin => origin.trim().replace(/\/+$/, ''))
-  .filter(Boolean);
+function buildImageAllowedOrigins(sisdepBase: string): string[] {
+  const defaults = 'https://www.medellin.gov.co,https://medellin.gov.co';
+  const origins = new Set(
+    (process.env.IMAGE_ALLOWED_ORIGINS || defaults)
+      .split(',')
+      .map((origin) => origin.trim().replace(/\/+$/, ''))
+      .filter(Boolean)
+  );
+
+  try {
+    origins.add(new URL(sisdepBase).origin);
+  } catch {
+    // SISDEP_BASE_URL inválida: solo se usan los orígenes del env.
+  }
+
+  return [...origins];
+}
+
+const imageAllowedOrigins = buildImageAllowedOrigins(sisdepBaseUrl);
 
 // Middleware for handling JSON data and forms
 app.use(express.json({ limit: "10mb" })); // 📌 Permite JSON grande (Base64)
