@@ -101,8 +101,8 @@ app.get('/', (req: Request, res: Response) => {
       },
       {
         method: "GET",
-        path: "/api/proxy-image?url=",
-        description: "Proxy para imágenes que valida dominios permitidos (medellin.gov.co) y requiere autenticación."
+        path: "/proxy-image?url=",
+        description: "Proxy para imágenes que valida dominios permitidos y requiere autenticación."
       },
       {
         method: "POST",
@@ -179,7 +179,7 @@ const asyncHandler = (fn: Function) => {
   };
 };
 
-app.get('/api/proxy-image', asyncHandler(async (req: Request, res: Response) => {
+const proxyImageHandler = asyncHandler(async (req: Request, res: Response) => {
   const authToken = req.headers['x-access'];
   const imageUrl = req.query.url as string;
 
@@ -263,7 +263,10 @@ app.get('/api/proxy-image', asyncHandler(async (req: Request, res: Response) => 
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
-}));
+});
+
+app.get('/proxy-image', proxyImageHandler);
+app.get('/api/proxy-image', proxyImageHandler);
 
 interface LoginCredentials {
   username: string;
