@@ -60,12 +60,19 @@ const sisdepBaseUrl = (process.env.SISDEP_BASE_URL || 'https://www.medellin.gov.
 
 function buildImageAllowedOrigins(sisdepBase: string): string[] {
   const defaults = 'https://www.medellin.gov.co,https://medellin.gov.co';
-  const origins = new Set(
-    (process.env.IMAGE_ALLOWED_ORIGINS || defaults)
-      .split(',')
-      .map((origin) => origin.trim().replace(/\/+$/, ''))
-      .filter(Boolean)
-  );
+  const origins = new Set<string>();
+
+  for (const entrada of (process.env.IMAGE_ALLOWED_ORIGINS || defaults).split(',')) {
+    const limpia = entrada.trim();
+    if (!limpia) continue;
+    try {
+      // Se guarda el origen normalizado (esquema + host + puerto). Si la entrada
+      // trae ruta se ignora: la comparacion es por origen, no por prefijo.
+      origins.add(new URL(limpia).origin);
+    } catch {
+      // Entrada mal formada: se descarta en vez de admitirla a ciegas.
+    }
+  }
 
   try {
     origins.add(new URL(sisdepBase).origin);
@@ -74,6 +81,37 @@ function buildImageAllowedOrigins(sisdepBase: string): string[] {
   }
 
   return [...origins];
+}
+
+/**
+ * Decide si el proxy de imagenes puede ir a esta URL.
+ *
+ * Antes se comparaba con `startsWith` sobre la cadena, y eso deja pasar dominios
+ * ajenos que apenas comparten el prefijo:
+ *
+ *   https://medellin.gov.co.otro-dominio/x.png   -> host real: medellin.gov.co.otro-dominio
+ *   https://medellin.gov.co@otro-dominio/x.png   -> host real: otro-dominio
+ *
+ * Importa porque el handler reenvia el `x-access` de quien llama en la cabecera:
+ * una URL asi se lleva el token del usuario a un servidor ajeno.
+ *
+ * Se compara el origen ya parseado, que es lo unico que no se puede disfrazar.
+ */
+function esImagenPermitida(rawUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+
+  // Solo http/https: descarta file:, data:, gopher: y demas esquemas.
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
+
+  // Credenciales embebidas: el host real es el de despues de la arroba.
+  if (parsed.username || parsed.password) return false;
+
+  return imageAllowedOrigins.includes(parsed.origin);
 }
 
 const imageAllowedOrigins = buildImageAllowedOrigins(sisdepBaseUrl);
@@ -214,7 +252,7 @@ const proxyImageHandler = asyncHandler(async (req: Request, res: Response) => {
   }
 
   // 2. Allow only specific domains
-  if (!imageAllowedOrigins.some(domain => imageUrl.startsWith(domain))) {
+  if (!esImagenPermitida(imageUrl)) {
     return res.status(403).json({
       success: false,
       message: 'Dominio no permitido'
