@@ -35,6 +35,22 @@ stages:
 
     - checkout: self
 
+    # Las pruebas corren ANTES de construir la imagen: si fallan, no se publica
+    # nada en ECR y por lo tanto no se dispara el despliegue a UAT.
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '20.x'
+      displayName: Instalar Node
+
+    - script: npm ci
+      displayName: Instalar dependencias
+
+    - script: npm audit --omit=dev --audit-level=high
+      displayName: Auditar dependencias de produccion
+
+    - script: npm test
+      displayName: Ejecutar pruebas
+
     - script: |
         docker build \
           --label version=$(TAG) \
