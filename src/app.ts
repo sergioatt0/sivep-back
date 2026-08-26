@@ -43,7 +43,9 @@ if (!process.env.NODE_ENV) {
 
 // Configure dotenv according to the environment
 if (process.env.NODE_ENV === 'development') {
-  dotenv.config({ path: path.resolve(__dirname, '../.env.development.local') });
+  // quiet: dotenv 17 imprime un banner promocional en cada arranque; sin esto
+  // queda en los logs del contenedor.
+  dotenv.config({ path: path.resolve(__dirname, '../.env.development.local'), quiet: true });
   console.log("Entorno de desarrollo configurado.");
 } else if (process.env.NODE_ENV === 'production') {
   // .env is not loaded in production, since AWS takes care of the environment variables
@@ -79,6 +81,11 @@ function buildImageAllowedOrigins(sisdepBase: string): string[] {
 const imageAllowedOrigins = buildImageAllowedOrigins(sisdepBaseUrl);
 
 // Middleware for handling JSON data and forms
+// Express 5 cambio el parser de query de 'extended' a 'simple'. Este backend
+// reenvia req.query tal cual a SISDEP en casi todos los endpoints, asi que se deja
+// el comportamiento de Express 4 para que ningun filtro cambie de forma en el camino.
+app.set('query parser', 'extended');
+
 app.use(express.json({ limit: "10mb" })); // 📌 Permite JSON grande (Base64)
 app.use(express.urlencoded({ extended: true, limit: "10mb" })); // 📌 Permite datos codificados en URLs
 
