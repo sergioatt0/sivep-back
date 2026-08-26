@@ -63,11 +63,17 @@ Una vez corriendo, `GET http://localhost:5001/` devuelve la lista de endpoints:
 
 ### Smoke test
 
+Exportar antes las credenciales del entorno, para no dejarlas en el historial del shell ni en este archivo:
+
 ```bash
-# Login contra el entorno de pruebas (credenciales: admin / prueba123)
+read -r SISDEP_USER; read -rs SISDEP_PASSWORD; export SISDEP_USER SISDEP_PASSWORD
+```
+
+```bash
+# Login. Usar un usuario propio del entorno; nunca escribir credenciales aqui.
 curl -s -X POST http://localhost:5001/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"prueba123"}'
+  -d "{\"username\":\"$SISDEP_USER\",\"password\":\"$SISDEP_PASSWORD\"}"
 
 # Obtener ventero (reemplazar TOKEN con el valor de `token` devuelto arriba)
 curl -s http://localhost:5001/ventero-completo/1 -H "x-access: TOKEN"

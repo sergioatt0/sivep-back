@@ -1,23 +1,10 @@
 import dotenv from 'dotenv';
 import http from 'http';
 import express, {NextFunction, Request, Response} from 'express';
-import axios from 'axios';
-import { AxiosRequestConfig } from 'axios';
-import { fileURLToPath } from 'url';
+import axios, { AxiosRequestConfig } from 'axios';
 import cors from 'cors';
 import path from 'path';
 const app = express();
-
-/*
-// Get the current file name and directory name
-const __filename = fileURLToPath(import.meta.url);
-import path from 'path';
-
-// Get the directory name of the current module
-const __dirname = path.dirname(__filename);
-*/
-
-//const __dirname = path.resolve();
 
 interface PersonaResponse {
   nombres: string;
@@ -43,7 +30,9 @@ if (!process.env.NODE_ENV) {
 
 // Configure dotenv according to the environment
 if (process.env.NODE_ENV === 'development') {
-  dotenv.config({ path: path.resolve(__dirname, '../.env.development.local') });
+  // quiet: dotenv 17 imprime un banner promocional en cada arranque; sin esto
+  // queda en los logs del contenedor.
+  dotenv.config({ path: path.resolve(__dirname, '../.env.development.local'), quiet: true });
   console.log("Entorno de desarrollo configurado.");
 } else if (process.env.NODE_ENV === 'production') {
   // .env is not loaded in production, since AWS takes care of the environment variables
@@ -56,16 +45,30 @@ if (process.env.NODE_ENV === 'development') {
 const isProduction = process.env.NODE_ENV === 'production';
 const port = isProduction ? Number(process.env.PORT) || 8080 : 5001;
 
-const sisdepBaseUrl = (process.env.SISDEP_BASE_URL || 'https://www.medellin.gov.co/sisdep/back').replace(/\/+$/, '');
+/** Recorta las barras finales sin expresiones regulares: recorrido lineal, sin backtracking. */
+function sinBarrasFinales(url: string): string {
+  let fin = url.length;
+  while (fin > 0 && url[fin - 1] === '/') fin--;
+  return url.slice(0, fin);
+}
+
+const sisdepBaseUrl = sinBarrasFinales(process.env.SISDEP_BASE_URL || 'https://www.medellin.gov.co/sisdep/back');
 
 function buildImageAllowedOrigins(sisdepBase: string): string[] {
   const defaults = 'https://www.medellin.gov.co,https://medellin.gov.co';
-  const origins = new Set(
-    (process.env.IMAGE_ALLOWED_ORIGINS || defaults)
-      .split(',')
-      .map((origin) => origin.trim().replace(/\/+$/, ''))
-      .filter(Boolean)
-  );
+  const origins = new Set<string>();
+
+  for (const entrada of (process.env.IMAGE_ALLOWED_ORIGINS || defaults).split(',')) {
+    const limpia = entrada.trim();
+    if (!limpia) continue;
+    try {
+      // Se guarda el origen normalizado (esquema + host + puerto). Si la entrada
+      // trae ruta se ignora: la comparacion es por origen, no por prefijo.
+      origins.add(new URL(limpia).origin);
+    } catch {
+      // Entrada mal formada: se descarta en vez de admitirla a ciegas.
+    }
+  }
 
   try {
     origins.add(new URL(sisdepBase).origin);
@@ -76,9 +79,45 @@ function buildImageAllowedOrigins(sisdepBase: string): string[] {
   return [...origins];
 }
 
+/**
+ * Decide si el proxy de imagenes puede ir a esta URL.
+ *
+ * Antes se comparaba con `startsWith` sobre la cadena, y eso deja pasar dominios
+ * ajenos que apenas comparten el prefijo:
+ *
+ *   https://medellin.gov.co.otro-dominio/x.png   -> host real: medellin.gov.co.otro-dominio
+ *   https://medellin.gov.co@otro-dominio/x.png   -> host real: otro-dominio
+ *
+ * Importa porque el handler reenvia el `x-access` de quien llama en la cabecera:
+ * una URL asi se lleva el token del usuario a un servidor ajeno.
+ *
+ * Se compara el origen ya parseado, que es lo unico que no se puede disfrazar.
+ */
+function esImagenPermitida(rawUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+
+  // Solo http/https: descarta file:, data:, gopher: y demas esquemas.
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
+
+  // Credenciales embebidas: el host real es el de despues de la arroba.
+  if (parsed.username || parsed.password) return false;
+
+  return imageAllowedOrigins.includes(parsed.origin);
+}
+
 const imageAllowedOrigins = buildImageAllowedOrigins(sisdepBaseUrl);
 
 // Middleware for handling JSON data and forms
+// Express 5 cambio el parser de query de 'extended' a 'simple'. Este backend
+// reenvia req.query tal cual a SISDEP en casi todos los endpoints, asi que se deja
+// el comportamiento de Express 4 para que ningun filtro cambie de forma en el camino.
+app.set('query parser', 'extended');
+
 app.use(express.json({ limit: "10mb" })); // 📌 Permite JSON grande (Base64)
 app.use(express.urlencoded({ extended: true, limit: "10mb" })); // 📌 Permite datos codificados en URLs
 
@@ -100,6 +139,17 @@ const corsOptions = {
   allowedHeaders: ["Content-Type", 'x-access', 'Accept'],
   credentials: true,// Allowed HTTP headers
 };
+
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+  if (isProduction) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
 
 app.use(cors(corsOptions));
 
@@ -214,7 +264,7 @@ const proxyImageHandler = asyncHandler(async (req: Request, res: Response) => {
   }
 
   // 2. Allow only specific domains
-  if (!imageAllowedOrigins.some(domain => imageUrl.startsWith(domain))) {
+  if (!esImagenPermitida(imageUrl)) {
     return res.status(403).json({
       success: false,
       message: 'Dominio no permitido'
@@ -263,7 +313,7 @@ const proxyImageHandler = asyncHandler(async (req: Request, res: Response) => {
     res.send(response.data);
 
   } catch (error: any) {
-    console.error('Error en proxy-image:', error);
+    console.error('Error en proxy-image:', error?.message);
 
     if (error.code === 'ECONNABORTED') {
       return res.status(504).json({
@@ -340,7 +390,6 @@ app.post('/login', asyncHandler(async (req: Request, res: Response) => {
       }
     });
 
-    // console.log('loginResponse ',loginResponse.data.token)
 
     // Clear timeout if it exists
     if (timeout) {
@@ -449,7 +498,7 @@ app.get('/ventero-completo/:id', asyncHandler(async (req: Request, res: Response
     });
 
   } catch (error: any) {
-    console.error('Error en proxy:', error);
+    console.error('Error en proxy:', error?.message);
 
     if (error.response) {
       // Api error
