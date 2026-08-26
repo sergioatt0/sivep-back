@@ -124,13 +124,13 @@ stages:
 # ========================
 # PREPROD (CON APPROVAL)
 # ========================
-- stage: PREPROD
-  displayName: Deploy PREPROD
+- stage: PRODUCTION
+  displayName: Deploy PRODUCTION
   dependsOn: UAT
   condition: succeeded()
   jobs:
   - deployment: DeployPreprod
-    displayName: Deploy to PREPROD
+    displayName: Deploy to PRODUCTION
     environment: sivep-back-preprod 
     strategy:
       runOnce:
@@ -155,8 +155,8 @@ stages:
                 echo "===> Updating docker-stack.yml"
                 TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sivep/docker-stack.yml
 
-  - job: Notify_PREPROD
-    displayName: Notify PREPROD
+  - job: Notify_PRODUCTION
+    displayName: Notify PRODUCTION
 
     dependsOn: DeployPreprod
 
@@ -170,6 +170,6 @@ stages:
     - template: DevOps/telegram-notify.yml
       parameters:
         type: DEPLOY
-        environment: PREPROD
+        environment: PRODUCTION
         status: $(DEPLOY_STATUS)
         tag: ${{ parameters.tag }}
