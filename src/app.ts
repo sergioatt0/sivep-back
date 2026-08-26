@@ -1,23 +1,10 @@
 import dotenv from 'dotenv';
 import http from 'http';
 import express, {NextFunction, Request, Response} from 'express';
-import axios from 'axios';
-import { AxiosRequestConfig } from 'axios';
-import { fileURLToPath } from 'url';
+import axios, { AxiosRequestConfig } from 'axios';
 import cors from 'cors';
 import path from 'path';
 const app = express();
-
-/*
-// Get the current file name and directory name
-const __filename = fileURLToPath(import.meta.url);
-import path from 'path';
-
-// Get the directory name of the current module
-const __dirname = path.dirname(__filename);
-*/
-
-//const __dirname = path.resolve();
 
 interface PersonaResponse {
   nombres: string;
@@ -56,14 +43,21 @@ if (process.env.NODE_ENV === 'development') {
 const isProduction = process.env.NODE_ENV === 'production';
 const port = isProduction ? Number(process.env.PORT) || 8080 : 5001;
 
-const sisdepBaseUrl = (process.env.SISDEP_BASE_URL || 'https://www.medellin.gov.co/sisdep/back').replace(/\/+$/, '');
+/** Recorta las barras finales sin expresiones regulares: recorrido lineal, sin backtracking. */
+function sinBarrasFinales(url: string): string {
+  let fin = url.length;
+  while (fin > 0 && url[fin - 1] === '/') fin--;
+  return url.slice(0, fin);
+}
+
+const sisdepBaseUrl = sinBarrasFinales(process.env.SISDEP_BASE_URL || 'https://www.medellin.gov.co/sisdep/back');
 
 function buildImageAllowedOrigins(sisdepBase: string): string[] {
   const defaults = 'https://www.medellin.gov.co,https://medellin.gov.co';
   const origins = new Set(
     (process.env.IMAGE_ALLOWED_ORIGINS || defaults)
       .split(',')
-      .map((origin) => origin.trim().replace(/\/+$/, ''))
+      .map((origin) => sinBarrasFinales(origin.trim()))
       .filter(Boolean)
   );
 
@@ -100,6 +94,17 @@ const corsOptions = {
   allowedHeaders: ["Content-Type", 'x-access', 'Accept'],
   credentials: true,// Allowed HTTP headers
 };
+
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+  if (isProduction) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
 
 app.use(cors(corsOptions));
 
@@ -263,7 +268,7 @@ const proxyImageHandler = asyncHandler(async (req: Request, res: Response) => {
     res.send(response.data);
 
   } catch (error: any) {
-    console.error('Error en proxy-image:', error);
+    console.error('Error en proxy-image:', error?.message);
 
     if (error.code === 'ECONNABORTED') {
       return res.status(504).json({
@@ -340,7 +345,6 @@ app.post('/login', asyncHandler(async (req: Request, res: Response) => {
       }
     });
 
-    // console.log('loginResponse ',loginResponse.data.token)
 
     // Clear timeout if it exists
     if (timeout) {
@@ -449,7 +453,7 @@ app.get('/ventero-completo/:id', asyncHandler(async (req: Request, res: Response
     });
 
   } catch (error: any) {
-    console.error('Error en proxy:', error);
+    console.error('Error en proxy:', error?.message);
 
     if (error.response) {
       // Api error
