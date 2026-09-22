@@ -1,0 +1,85 @@
+# =============================================================================
+# Pipeline de Seguridad (report-only): SAST con SonarQube + SCA de dependencias
+# Repositorio: sivep-back
+#
+# NO bloquea el build. Publica hallazgos y el estado del quality gate como
+# informacion, para PRs y pushes a las ramas de trabajo.
+#
+# Requisitos previos (configurar una sola vez en Azure DevOps):
+#   1. Extension "SonarQube" (SonarSource.sonarqube) instalada en la organizacion.
+#   2. SonarQube service connection (URL + token del servidor self-hosted) con el
+#      nombre definido en la variable SONAR_SERVICE_CONNECTION.
+#   3. Proyecto creado en SonarQube con la clave de sonar-project.properties.
+#   4. Nueva pipeline apuntando a este archivo.
+# Nota: si la extension instalada es la version 7, cambia @8 por @7 en las
+#       tres tareas SonarQube*.
+# =============================================================================
+
+trigger:
+  branches:
+    include:
+      - main
+      - sivep-back
+      - feature/scripts-qa
+
+pr:
+  branches:
+    include:
+      - main
+      - sivep-back
+      - feature/scripts-qa
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  # URL y token de SonarQube viven en el service connection, nunca en el YAML.
+  - name: SONAR_SERVICE_CONNECTION
+    value: 'SonarQube-SelfHosted'
+
+stages:
+  - stage: Security
+    displayName: 'Seguridad: SonarQube + dependencias'
+    jobs:
+      - job: SecurityScan
+        displayName: 'SAST + SCA (report-only)'
+        steps:
+          # Historial completo para el calculo de "new code" de SonarQube.
+          - checkout: self
+            fetchDepth: 0
+
+          # ------------------------------ SAST ------------------------------
+          - task: SonarQubePrepare@8
+            displayName: 'SonarQube: preparar analisis'
+            inputs:
+              SonarQube: '$(SONAR_SERVICE_CONNECTION)'
+              scannerMode: 'cli'
+              configMode: 'file'
+              configFile: 'sonar-project.properties'
+
+          - task: SonarQubeAnalyze@8
+            displayName: 'SonarQube: ejecutar analisis'
+
+          # Report-only: no falla el build por quality gate.
+          - task: SonarQubePublish@8
+            displayName: 'SonarQube: publicar quality gate (informativo)'
+            inputs:
+              pollingTimeoutSec: '300'
+
+          # ------------------------------ SCA -------------------------------
+          - script: |
+              npm audit --audit-level=high
+            displayName: 'SCA: npm audit (HIGH+)'
+            continueOnError: true
+
+          - script: |
+              set -euo pipefail
+              curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b "$(Pipeline.Workspace)/bin"
+              "$(Pipeline.Workspace)/bin/trivy" fs \
+                --scanners vuln \
+                --severity HIGH,CRITICAL \
+                --exit-code 1 \
+                --format table \
+                .
+            displayName: 'SCA: Trivy (lockfiles, HIGH/CRITICAL)'
+            continueOnError: true
