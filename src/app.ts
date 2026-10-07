@@ -172,7 +172,17 @@ app.get('/', (req: Request, res: Response) => {
       {
         method: "POST",
         path: "/login",
-        description: "Autenticación de usuarios contra el sistema SISDEP, requiere username y password."
+        description: "Autenticación contra SISDEP (username y password). Devuelve token, usuario, si es temporal, su fecha de vencimiento y cuándo vence la sesión."
+      },
+      {
+        method: "PATCH",
+        path: "/usuario/password",
+        description: "Cambia la contraseña del usuario de la sesión (SISDEP exige una clave segura), requiere token."
+      },
+      {
+        method: "GET",
+        path: "/recuperar/:documento",
+        description: "Solicita el correo de recuperación de contraseña de SISDEP."
       },
       {
         method: "GET",
@@ -355,79 +365,64 @@ interface UserDetailsResponse {
         email: string;
         esActivo: boolean;
         idGrupo: number;
+        esTemporal?: boolean;
+        fechaVencimiento?: string | null;
       };
     };
   };
 }
 
-// Calling https://www.medellin.gov.co/sisdep Api from sivep backend, login endpoint
+/**
+ * Login contra SISDEP. SIVEP no valida contraseñas: las valida SISDEP (Argon2id
+ * + pepper con migración desde bcrypt, LDAP para quien no tiene clave local,
+ * usuario activo con grupo y vigencia de los usuarios temporales). Aquí solo se
+ * traducen sus respuestas para el front de SIVEP.
+ */
 app.post('/login', asyncHandler(async (req: Request, res: Response) => {
-  const { username, password } = req.body as LoginCredentials;
+  const { username, password } = (req.body || {}) as LoginCredentials;
 
-  // Basic validation
   if (!username || !password) {
     return res.status(400).json({
       success: false,
+      codigo: 'DATOS_INCOMPLETOS',
       message: 'Usuario y contraseña son requeridos'
     });
   }
 
-  let timeout: NodeJS.Timeout | null = null;
-  const controller = new AbortController();
-
   try {
-    timeout = setTimeout(() => controller.abort(), 15000);
+    // 1. Autenticación en SISDEP
+    const loginResponse = await axios.post<ExternalLoginResponse>(
+      `${sisdepBaseUrl}/login`,
+      { username, password },
+      { timeout: 15000, headers: { 'Content-Type': 'application/json' } }
+    );
 
-    // 1. First login request
-    const loginUrl = `${sisdepBaseUrl}/login`;
-    const loginResponse = await axios.post<ExternalLoginResponse>(loginUrl, {
-      username,
-      password
-    }, {
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    });
-
-
-    // Clear timeout if it exists
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-
-    // Validate first login response
-    if (!loginResponse.data.token || loginResponse.data.status !== "logged!, welcome board") {
+    if (!loginResponse.data.token || loginResponse.data.status !== 'logged!, welcome board') {
       return res.status(401).json({
         success: false,
+        codigo: 'CREDENCIALES_INVALIDAS',
         message: 'Autenticación fallida'
       });
     }
 
-    // 2. Validate user details if the first response is successful and active
-    timeout = setTimeout(() => controller.abort(), 10000);
-    const userDetailsUrl = `${sisdepBaseUrl}/api/seguridad/usuario/ego`;
-
-    const userDetailsResponse = await axios.get<UserDetailsResponse>(userDetailsUrl, {
-      signal: controller.signal,
-      headers: {
-        'x-access': `${loginResponse.data.token}`,
-        'Content-Type': 'application/json'
+    // 2. Datos del usuario (incluye si es temporal y hasta cuándo)
+    const userDetailsResponse = await axios.get<UserDetailsResponse>(
+      `${sisdepBaseUrl}/api/seguridad/usuario/ego`,
+      {
+        timeout: 10000,
+        headers: { 'x-access': `${loginResponse.data.token}`, 'Content-Type': 'application/json' }
       }
-    });
+    );
 
-    if (timeout) clearTimeout(timeout);
-
-    // Validate the second response
-    const userData = userDetailsResponse.data.entities.usuario[loginResponse.data.idUser];
+    const userData = userDetailsResponse.data?.entities?.usuario?.[loginResponse.data.idUser];
     if (!userData || !userData.esActivo) {
       return res.status(403).json({
         success: false,
+        codigo: 'USUARIO_INACTIVO',
         message: 'El usuario no está activo en el sistema'
       });
     }
 
-    // Successful login, return the token and the whole user data
     res.json({
       success: true,
       token: loginResponse.data.token,
@@ -437,34 +432,88 @@ app.post('/login', asyncHandler(async (req: Request, res: Response) => {
         nombre: userData.nombre,
         apellido: userData.apellido,
         email: userData.email,
-        activo: userData.esActivo
+        activo: userData.esActivo,
+        esTemporal: userData.esTemporal === true,
+        fechaVencimiento: userData.fechaVencimiento ?? null,
+        sesionExpira: expiracionDelToken(loginResponse.data.token)
       }
     });
 
   } catch (error: any) {
-    if (timeout) clearTimeout(timeout);
-
-    if (error.name === 'AbortError' || error.code === 'ECONNABORTED') {
-      return res.status(504).json({
-        success: false,
-        message: 'El servicio no respondió a tiempo'
-      });
+    if (error.code === 'ECONNABORTED' || error.name === 'AbortError') {
+      return res.status(504).json({ success: false, message: 'El servicio no respondió a tiempo' });
     }
 
-    if (axios.isAxiosError(error)) {
-      const status = error.response?.status || 500;
-      const message = error.response?.data?.message || 'Error en el servicio';
+    if (axios.isAxiosError(error) && error.response) {
+      const status = error.response.status;
+      const message = mensajeSisdep(error.response.data, 'Error en el servicio');
 
+      // SISDEP responde 400 o 401 cuando rechaza el acceso; para el front es un 401.
+      if (status === 400 || status === 401) {
+        return res.status(401).json({ success: false, codigo: codigoDeAcceso(message), message });
+      }
       return res.status(status).json({
         success: false,
         message: status === 403 ? 'Acceso no autorizado' : message
       });
     }
 
-    res.status(500).json({
-      success: false,
-      message: 'Error interno del servidor'
+    if (axios.isAxiosError(error)) {
+      return res.status(504).json({ success: false, message: 'El servicio no respondió a tiempo' });
+    }
+
+    res.status(500).json({ success: false, message: 'Error interno del servidor' });
+  }
+}));
+
+/**
+ * Cambio de contraseña del usuario de la sesión. SISDEP exige una clave segura
+ * (nbvcxz): si no lo es, responde 409 con las sugerencias, que se devuelven tal cual.
+ */
+app.patch('/usuario/password', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const password = (req.body || {}).password;
+  if (!password || typeof password !== 'string') {
+    return res.status(400).json({ success: false, message: 'La nueva contraseña es requerida' });
+  }
+  try {
+    await axios.patch(
+      `${sisdepBaseUrl}/api/seguridad/usuario/ego/password`,
+      { password },
+      buildAxiosConfig(authToken)
+    );
+    res.json({ success: true, message: 'Contraseña actualizada' });
+  } catch (error: any) {
+    if (error.response?.status === 409) {
+      return res.status(409).json({
+        success: false,
+        codigo: 'CLAVE_NO_SEGURA',
+        message: mensajeSisdep(error.response.data, 'La contraseña no es suficientemente segura')
+      });
+    }
+    handleProxyError(error, res, 'PATCH /api/seguridad/usuario/ego/password');
+  }
+}));
+
+/**
+ * Solicitud de recuperación de contraseña. SISDEP envía el correo solo si el
+ * documento existe y siempre responde lo mismo, para no revelar qué usuarios
+ * hay. El enlace del correo lleva al front de SISDEP (la cuenta es la misma).
+ */
+app.get('/recuperar/:documento', asyncHandler(async (req: Request, res: Response) => {
+  const documento = String(req.params.documento ?? '').trim();
+  if (!/^[0-9A-Za-z.-]{3,30}$/.test(documento)) {
+    return res.status(400).json({ success: false, message: 'Documento inválido' });
+  }
+  try {
+    await axios.get(`${sisdepBaseUrl}/reset/${encodeURIComponent(documento)}`, { timeout: 15000 });
+    res.json({
+      success: true,
+      message: 'Si el documento está registrado, se enviará un correo con el enlace para restablecer la contraseña.'
     });
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /reset/:documento');
   }
 }));
 
@@ -504,7 +553,8 @@ app.get('/ventero-completo/:id', asyncHandler(async (req: Request, res: Response
       // Api error
       res.status(error.response.status).json({
         success: false,
-        message: error.response.data?.message || 'Error en el servidor remoto'
+        message: mensajeSisdep(error.response.data, 'Error en el servidor remoto'),
+        ...marcaSesionVencida(error.response.status)
       });
     } else if (error.request) {
       // No response from the server
@@ -556,7 +606,8 @@ app.get('/ventero/:id/expediente', asyncHandler(async (req: Request, res: Respon
     if (error.response) {
       res.status(error.response.status).json({
         success: false,
-        message: error.response.data?.message || 'Error en el servidor remoto'
+        message: mensajeSisdep(error.response.data, 'Error en el servidor remoto'),
+        ...marcaSesionVencida(error.response.status)
       });
     } else if (error.request) {
       res.status(504).json({
@@ -606,7 +657,8 @@ app.get('/ventero-por-documento/:documento', asyncHandler(async (req: Request, r
     if (error.response) {
       res.status(error.response.status).json({
         success: false,
-        message: error.response.data?.message || 'Error en el servidor remoto'
+        message: mensajeSisdep(error.response.data, 'Error en el servidor remoto'),
+        ...marcaSesionVencida(error.response.status)
       });
     } else if (error.request) {
       res.status(504).json({
@@ -639,12 +691,50 @@ function buildAxiosConfig(authToken: string | string[], query?: any): AxiosReque
   };
 }
 
+/**
+ * Mensaje de error que devuelve SISDEP. Acepta el contrato actual
+ * {"errors":[{"title","detail"}]} y el anterior {"message"}.
+ */
+function mensajeSisdep(data: any, porDefecto: string): string {
+  const primero = Array.isArray(data?.errors) ? data.errors[0] : undefined;
+  const detalle = primero?.detail || primero?.title || data?.message;
+  return typeof detalle === 'string' && detalle.trim() ? detalle : porDefecto;
+}
+
+/** Un 401 de SISDEP en un endpoint con token significa sesión vencida o inválida. */
+function marcaSesionVencida(status: number | undefined): { sesionVencida?: true } {
+  return status === 401 ? { sesionVencida: true } : {};
+}
+
+/** Clasifica el rechazo del login para que el front no dependa del texto. */
+function codigoDeAcceso(mensaje: string): string {
+  if (/acceso temporal venci/i.test(mensaje)) return 'ACCESO_TEMPORAL_VENCIDO';
+  if (/no activad|sin permisos|no tiene grupo/i.test(mensaje)) return 'USUARIO_INACTIVO';
+  return 'CREDENCIALES_INVALIDAS';
+}
+
+/**
+ * Fecha (ISO) en que vence el token de SISDEP, leída del claim "exp" sin
+ * verificar la firma: solo informa al front cuándo tendrá que volver a entrar.
+ * Para un temporal coincide con el fin de su último día de acceso.
+ */
+function expiracionDelToken(token: string): string | null {
+  try {
+    const payload = token.split('.')[1];
+    const json = JSON.parse(Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+    return typeof json.exp === 'number' ? new Date(json.exp * 1000).toISOString() : null;
+  } catch {
+    return null;
+  }
+}
+
 function handleProxyError(error: any, res: Response, route: string) {
   console.error(`Error en ${route}:`, error.message);
   if (error.response) {
     res.status(error.response.status).json({
       success: false,
-      message: error.response.data?.message || 'Error en el servidor remoto'
+      message: mensajeSisdep(error.response.data, 'Error en el servidor remoto'),
+        ...marcaSesionVencida(error.response.status)
     });
   } else if (error.request) {
     res.status(504).json({
@@ -953,7 +1043,8 @@ app.get('/archivos/:folder/:filename', asyncHandler(async (req: Request, res: Re
       try { parsed = JSON.parse(body); } catch { /* mantener texto */ }
       return res.status(upstream.status).json({
         success: false,
-        message: parsed.message || 'Error en el servidor remoto'
+        message: mensajeSisdep(parsed, 'Error en el servidor remoto'),
+        ...marcaSesionVencida(upstream.status)
       });
     }
 
@@ -1129,7 +1220,8 @@ app.get('/general/direccionCompleta/excel', asyncHandler(async (req: Request, re
       try { parsed = JSON.parse(body); } catch { /* texto plano */ }
       return res.status(upstream.status).json({
         success: false,
-        message: parsed.message || 'Error en el servidor remoto'
+        message: mensajeSisdep(parsed, 'Error en el servidor remoto'),
+        ...marcaSesionVencida(upstream.status)
       });
     }
 
