@@ -186,6 +186,56 @@ app.get('/', (req: Request, res: Response) => {
       },
       {
         method: "GET",
+        path: "/operativa/sensibilizacion",
+        description: "Lista sensibilizaciones con filtros (idSectorInterno, idPersona, idTareaOperativa, numeroSerie, esNn, completo, fechas). También /paginated."
+      },
+      {
+        method: "GET",
+        path: "/operativa/sensibilizacion/:id",
+        description: "Detalle: sensibilización, puesto de venta, titular y fichas formal/informal en una sola llamada."
+      },
+      {
+        method: "POST",
+        path: "/operativa/sensibilizacion",
+        description: "Crea una sensibilización con ventero o sin ventero (NN, exige territorio). idUsuario sale de la sesión."
+      },
+      {
+        method: "PATCH",
+        path: "/operativa/sensibilizacion/:id",
+        description: "Edita, completa o asigna vendedor. Verifica el permiso de escritura del grupo y envía el registro completo."
+      },
+      {
+        method: "POST/PATCH",
+        path: "/operativa/sensibilizacion/:id/formal | /informal",
+        description: "Crea o edita la ficha de formales o de informales."
+      },
+      {
+        method: "GET",
+        path: "/operativa/sensibilizacion/:id/historial",
+        description: "Bitácora de cambios de la sensibilización."
+      },
+      {
+        method: "GET",
+        path: "/operativa/sectorInterno",
+        description: "Territorios."
+      },
+      {
+        method: "GET",
+        path: "/dominios/tipoSensibilizacion | actividadProhibida | sitioProhibido | claseVenta",
+        description: "Catálogos del formulario de sensibilización."
+      },
+      {
+        method: "GET",
+        path: "/ventero/:id/puesto",
+        description: "Puesto de venta (datos_venta) de un ventero."
+      },
+      {
+        method: "GET",
+        path: "/archivos?modulo=&idModulo= y /archivos/:id",
+        description: "Archivos de un registro (fotos, firmas) y ficha de un archivo."
+      },
+      {
+        method: "GET",
         path: "/ventero-completo/:id",
         description: "Obtiene información combinada de ventero y persona para un ID específico, requiere token de autenticación."
       },
@@ -1232,6 +1282,372 @@ app.get('/general/direccionCompleta/excel', asyncHandler(async (req: Request, re
     upstream.data.pipe(res);
   } catch (error: any) {
     handleProxyError(error, res, 'GET /api/general/direccionCompleta/excel');
+  }
+}));
+
+// ============================================================
+// Sensibilizaciones — proxy a SISDEP (módulo Operativa)
+//
+// SIVEP usa los mismos usuarios y permisos de SISDEP. Reglas que se aplican
+// aquí antes de llamar a SISDEP:
+//   - idUsuario (quien registra) sale del token de la sesión, no del cliente.
+//   - esNn y territorio (texto, obsoleto) no se aceptan: esNn lo calcula SISDEP.
+//   - Una sensibilización sin ventero (NN) exige territorio (idSectorInterno),
+//     igual que el formulario de SISDEP.
+//   - numeroSerie es único: se verifica antes de enviar.
+//   - Los PATCH de SISDEP no verifican el permiso de escritura (pendiente de
+//     seguridad): SIVEP lo verifica con los permisos del grupo del usuario.
+//   - Se edita enviando el registro completo (actual + cambios), para que un
+//     PATCH parcial no deje en blanco campos que no se mandaron.
+//   - No se exponen borrados ni el historial general de solicitudes.
+// ============================================================
+
+const MODULO_SENSIBILIZACION = 34;
+
+const CAMPOS_SENSIBILIZACION = [
+  'fecha', 'idTipo', 'numeroSerie', 'idPersona', 'idTareaOperativa', 'idSectorInterno',
+  'idDatosVenta', 'nombreEstablecimiento', 'observaciones', 'esPqrsd', 'radicadoEntrada',
+  'fechaRadicado', 'retiraElementosEspacioPublico', 'personaInformada', 'firmaQuienDiligencia',
+  'nombreQuienLlena', 'documentoQuienLlena', 'numeroPeto', 'servicioPertenece', 'localizacion',
+  'latitud', 'longitud', 'fotoProcedimiento', 'fotoActa', 'completo', 'idActividadProhibida',
+  'idSitioProhibido'
+];
+const CAMPOS_FORMAL = [
+  'nombreEstablecimiento', 'cumpleActividadEconomica', 'autoAvisosPublicitarios',
+  'cantiAvisosPublicitarios', 'autoMesasSillas', 'cantiMesasSillas', 'autoJuegosMecanicos',
+  'cantiJuegosMecanicos', 'autoBazares', 'cantiBazares', 'realizaActividadProhibida'
+];
+const CAMPOS_INFORMAL = [
+  'cumpleClaseVenta', 'cumpleActividadEconomica', 'ocupacionAprovechamiento',
+  'aprovechamientoEconomico', 'actividadProhibida'
+];
+const FILTROS_SENSIBILIZACION = [
+  'idSectorInterno', 'idPersona', 'idTareaOperativa', 'idDatosVenta', 'numeroSerie', 'esNn',
+  'completo', 'idUsuario', 'idTipo', 'fecha__gte', 'fecha__lte', 'fecha__between',
+  'page', 'size', 'sort'
+];
+
+/** Solo los campos permitidos de un objeto. */
+function soloCampos(origen: any, campos: string[]): Record<string, any> {
+  const r: Record<string, any> = {};
+  for (const c of campos) if (origen && Object.prototype.hasOwnProperty.call(origen, c)) r[c] = origen[c];
+  return r;
+}
+
+/** Filas de una respuesta genérica de SISDEP: {"entities":{"<entidad>":{"<id>":{...}}}}. */
+function entidades(data: any, nombre: string): any[] {
+  const m = data?.entities?.[nombre];
+  return m && typeof m === 'object' ? Object.values(m) : [];
+}
+
+/** Claims del token de SISDEP (userId, groupId). Sin verificar firma: SISDEP la verifica en cada llamada. */
+function reclamosDelToken(token: string | string[]): { userId?: number; groupId?: number } {
+  try {
+    const t = Array.isArray(token) ? token[0] : token;
+    const payload = JSON.parse(Buffer.from(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+    return { userId: payload.userId, groupId: payload.groupId };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * ¿El grupo del usuario puede escribir en el módulo? Misma regla de SISDEP: el
+ * grupo 0 siempre puede; los demás según permisos_x_modulo_x_grupo. La consulta
+ * va con el token del usuario, así que un token inválido falla aquí con 401.
+ */
+async function puedeEscribir(token: string | string[], idModulo: number): Promise<boolean | 'sin_sesion'> {
+  const { groupId } = reclamosDelToken(token);
+  if (groupId === 0) return true;
+  if (typeof groupId !== 'number') return 'sin_sesion';
+  const r = await axios.get(
+    `${sisdepBaseUrl}/api/seguridad/permisoModuloGrupo`,
+    buildAxiosConfig(token, { idGrupo: groupId, idModuloSistema: idModulo })
+  );
+  return entidades(r.data, 'permisoModuloGrupo')
+    .some((p: any) => p.idGrupo === groupId && p.idModuloSistema === idModulo && p.escribir === true);
+}
+
+/** Respuesta cuando puedeEscribir no autoriza: token ilegible (401) o sin permiso (403). */
+function sinPermiso(res: Response, motivo: boolean | 'sin_sesion' = false) {
+  if (motivo === 'sin_sesion') {
+    return res.status(401).json({ success: false, message: 'Token inválido', sesionVencida: true });
+  }
+  return res.status(403).json({
+    success: false,
+    codigo: 'SIN_PERMISO',
+    message: 'No tiene permiso para registrar o editar sensibilizaciones'
+  });
+}
+
+/** ¿Ya existe otra sensibilización con ese número de serie? */
+async function numeroSerieOcupado(token: string | string[], numeroSerie: string, exceptoId?: number): Promise<boolean> {
+  const r = await axios.get(
+    `${sisdepBaseUrl}/api/operativa/sensibilizacion`,
+    buildAxiosConfig(token, { numeroSerie })
+  );
+  return entidades(r.data, 'sensibilizacion')
+    .some((s: any) => s.numeroSerie === numeroSerie && s.id !== exceptoId);
+}
+
+/** Validación común de creación y edición. Devuelve el mensaje de error o null. */
+function validarSensibilizacion(s: Record<string, any>): string | null {
+  if (!s.numeroSerie || typeof s.numeroSerie !== 'string' || !s.numeroSerie.trim()) return 'El número de serie (consecutivo del acta) es obligatorio';
+  if (s.idTipo === undefined || s.idTipo === null) return 'El tipo de sensibilización es obligatorio';
+  if (!s.fecha) return 'La fecha es obligatoria';
+  if ((s.idPersona === undefined || s.idPersona === null) && (s.idSectorInterno === undefined || s.idSectorInterno === null)) {
+    return 'Una sensibilización sin ventero (NN) debe tener territorio (idSectorInterno)';
+  }
+  return null;
+}
+
+function idDeFicha(nombre: string) {
+  return nombre === 'formal' ? 'sensibilizacionFormales' : 'sensibilizacionInformales';
+}
+
+// --- Catálogos que usa el formulario ---
+app.get('/dominios/tipoSensibilizacion', proxyGetCatalogo('/api/dominios/tipoSensibilizacion'));
+app.get('/dominios/actividadProhibida', proxyGetCatalogo('/api/dominios/actividadProhibida'));
+app.get('/dominios/sitioProhibido', proxyGetCatalogo('/api/dominios/sitioProhibido'));
+app.get('/dominios/claseVenta', proxyGetCatalogo('/api/dominios/claseVenta'));
+// Territorios (sectores internos)
+app.get('/operativa/sectorInterno', proxyGetCatalogo('/api/operativa/sectorInterno'));
+
+// Puesto de venta de un ventero (datos_venta)
+app.get('/ventero/:id/puesto', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const r = await axios.get(`${sisdepBaseUrl}/api/ventero/datosVenta`, buildAxiosConfig(authToken, { idVentero: id }));
+    res.json(entidades(r.data, 'datosVenta'));
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/ventero/datosVenta');
+  }
+}));
+
+// --- Listados ---
+function proxyListaSensibilizaciones(sufijo: string) {
+  return asyncHandler(async (req: Request, res: Response) => {
+    const authToken = requireToken(req, res);
+    if (!authToken) return;
+    try {
+      const r = await axios.get(
+        `${sisdepBaseUrl}/api/operativa/sensibilizacion${sufijo}`,
+        buildAxiosConfig(authToken, soloCampos(req.query, FILTROS_SENSIBILIZACION))
+      );
+      res.status(r.status).json(r.data);
+    } catch (error: any) {
+      handleProxyError(error, res, `GET /api/operativa/sensibilizacion${sufijo}`);
+    }
+  });
+}
+app.get('/operativa/sensibilizacion', proxyListaSensibilizaciones(''));
+app.get('/operativa/sensibilizacion/paginated', proxyListaSensibilizaciones('/paginated'));
+
+// --- Detalle completo en una sola llamada (evita el 414 de pedir fichas por ids) ---
+app.get('/operativa/sensibilizacion/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const [venta, formales, informales] = await Promise.all([
+      axios.get(`${sisdepBaseUrl}/api/operativa/sensibilizacion/${id}/venta`, buildAxiosConfig(authToken)),
+      axios.get(`${sisdepBaseUrl}/api/operativa/sensibilizacionFormales`, buildAxiosConfig(authToken, { idSensibilizacion: id })),
+      axios.get(`${sisdepBaseUrl}/api/operativa/sensibilizacionInformales`, buildAxiosConfig(authToken, { idSensibilizacion: id }))
+    ]);
+    const { datosVenta = null, titular = null, ...sensibilizacion } = venta.data || {};
+    res.json({
+      sensibilizacion,
+      datosVenta,
+      titular,
+      formal: entidades(formales.data, 'sensibilizacionFormales')[0] ?? null,
+      informal: entidades(informales.data, 'sensibilizacionInformales')[0] ?? null
+    });
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/operativa/sensibilizacion/:id');
+  }
+}));
+
+// --- Bitácora de cambios de una sensibilización ---
+app.get('/operativa/sensibilizacion/:id/historial', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const r = await axios.get(`${sisdepBaseUrl}/api/historial/sensibilizacion/${id}`, buildAxiosConfig(authToken));
+    res.status(r.status).json(r.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/historial/sensibilizacion/:id');
+  }
+}));
+
+// --- Crear (con ventero o NN) ---
+app.post('/operativa/sensibilizacion', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const { userId } = reclamosDelToken(authToken);
+  const datos: Record<string, any> = { completo: false, ...soloCampos(req.body, CAMPOS_SENSIBILIZACION), idUsuario: userId };
+  if (typeof datos.numeroSerie === 'string') datos.numeroSerie = datos.numeroSerie.trim();
+  const invalido = validarSensibilizacion(datos);
+  if (invalido) return res.status(422).json({ success: false, codigo: 'DATOS_INVALIDOS', message: invalido });
+  if (typeof userId !== 'number') return res.status(401).json({ success: false, message: 'Token inválido', sesionVencida: true });
+  try {
+    if (await numeroSerieOcupado(authToken, datos.numeroSerie)) {
+      return res.status(409).json({ success: false, codigo: 'NUMERO_SERIE_REPETIDO', message: `El número de serie ${datos.numeroSerie} ya está registrado` });
+    }
+    const r = await axios.post(`${sisdepBaseUrl}/api/operativa/sensibilizacion`, datos, buildAxiosConfig(authToken));
+    const creada = entidades(r.data, 'sensibilizacion')[0] ?? r.data;
+    res.status(201).json({ success: true, sensibilizacion: creada });
+  } catch (error: any) {
+    handleProxyError(error, res, 'POST /api/operativa/sensibilizacion');
+  }
+}));
+
+// --- Editar / completar / asignar vendedor ---
+app.patch('/operativa/sensibilizacion/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const permiso = await puedeEscribir(authToken, MODULO_SENSIBILIZACION);
+    if (permiso !== true) return sinPermiso(res, permiso);
+
+    const actualResp = await axios.get(`${sisdepBaseUrl}/api/operativa/sensibilizacion/${id}`, buildAxiosConfig(authToken));
+    const actual = entidades(actualResp.data, 'sensibilizacion')[0];
+    if (!actual) return res.status(404).json({ success: false, message: 'Sensibilización no encontrada' });
+
+    const base = soloCampos(actual, CAMPOS_SENSIBILIZACION);
+    // La ubicación vuelve de SISDEP como objeto; se reenvía en WKT a partir de lat/long.
+    delete base.localizacion;
+    if (typeof actual.latitud === 'number' && typeof actual.longitud === 'number') {
+      base.localizacion = `POINT (${actual.longitud} ${actual.latitud})`;
+    }
+    const cambios = soloCampos(req.body, CAMPOS_SENSIBILIZACION);
+    const datos: Record<string, any> = { ...base, ...cambios, id: Number(id), idUsuario: actual.idUsuario };
+    if (typeof datos.numeroSerie === 'string') datos.numeroSerie = datos.numeroSerie.trim();
+    const invalido = validarSensibilizacion(datos);
+    if (invalido) return res.status(422).json({ success: false, codigo: 'DATOS_INVALIDOS', message: invalido });
+    if (cambios.numeroSerie !== undefined && datos.numeroSerie !== actual.numeroSerie
+        && await numeroSerieOcupado(authToken, datos.numeroSerie, Number(id))) {
+      return res.status(409).json({ success: false, codigo: 'NUMERO_SERIE_REPETIDO', message: `El número de serie ${datos.numeroSerie} ya está registrado` });
+    }
+    const motivo = typeof req.body?.motivo === 'string' ? req.body.motivo : undefined;
+    const r = await axios.patch(
+      `${sisdepBaseUrl}/api/operativa/sensibilizacion/${id}`,
+      motivo ? { ...datos, motivo_cambio: motivo } : datos,
+      buildAxiosConfig(authToken)
+    );
+    const editada = entidades(r.data, 'sensibilizacion')[0] ?? r.data;
+    res.json({ success: true, sensibilizacion: editada });
+  } catch (error: any) {
+    handleProxyError(error, res, 'PATCH /api/operativa/sensibilizacion/:id');
+  }
+}));
+
+// --- Ficha de formales / informales (una por sensibilización) ---
+function campoFicha(tipo: string) {
+  return tipo === 'formal' ? CAMPOS_FORMAL : CAMPOS_INFORMAL;
+}
+
+function crearFicha(tipo: 'formal' | 'informal') {
+  return asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  const entidad = idDeFicha(tipo);
+  try {
+    const existente = entidades(
+      (await axios.get(`${sisdepBaseUrl}/api/operativa/${entidad}`, buildAxiosConfig(authToken, { idSensibilizacion: id }))).data,
+      entidad
+    )[0];
+    if (existente) {
+      return res.status(409).json({ success: false, codigo: 'FICHA_EXISTENTE', message: `La sensibilización ya tiene ficha ${tipo}; use PATCH para editarla` });
+    }
+    // Las preguntas sí/no de la ficha son obligatorias en la base: lo no enviado va en false.
+    const datos: Record<string, any> = {};
+    for (const c of campoFicha(tipo)) if (c !== 'nombreEstablecimiento') datos[c] = false;
+    Object.assign(datos, soloCampos(req.body, campoFicha(tipo)), { idSensibilizacion: Number(id) });
+    const r = await axios.post(`${sisdepBaseUrl}/api/operativa/${entidad}`, datos, buildAxiosConfig(authToken));
+    res.status(201).json({ success: true, [tipo]: entidades(r.data, entidad)[0] ?? r.data });
+  } catch (error: any) {
+    handleProxyError(error, res, `POST /api/operativa/${entidad}`);
+  }
+});
+}
+
+function editarFicha(tipo: 'formal' | 'informal') {
+  return asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  const entidad = idDeFicha(tipo);
+  try {
+    const permiso = await puedeEscribir(authToken, MODULO_SENSIBILIZACION);
+    if (permiso !== true) return sinPermiso(res, permiso);
+    const actual = entidades(
+      (await axios.get(`${sisdepBaseUrl}/api/operativa/${entidad}`, buildAxiosConfig(authToken, { idSensibilizacion: id }))).data,
+      entidad
+    )[0];
+    if (!actual) {
+      return res.status(404).json({ success: false, message: `La sensibilización no tiene ficha ${tipo}; créela con POST` });
+    }
+    const datos = {
+      ...soloCampos(actual, campoFicha(tipo)),
+      ...soloCampos(req.body, campoFicha(tipo)),
+      id: actual.id,
+      idSensibilizacion: Number(id)
+    };
+    const motivo = typeof req.body?.motivo === 'string' ? req.body.motivo : undefined;
+    const r = await axios.patch(
+      `${sisdepBaseUrl}/api/operativa/${entidad}/${actual.id}`,
+      motivo ? { ...datos, motivo } : datos,
+      buildAxiosConfig(authToken)
+    );
+    res.json({ success: true, [tipo]: entidades(r.data, entidad)[0] ?? r.data });
+  } catch (error: any) {
+    handleProxyError(error, res, `PATCH /api/operativa/${entidad}/:id`);
+  }
+});
+}
+
+app.post('/operativa/sensibilizacion/:id/formal', crearFicha('formal'));
+app.post('/operativa/sensibilizacion/:id/informal', crearFicha('informal'));
+app.patch('/operativa/sensibilizacion/:id/formal', editarFicha('formal'));
+app.patch('/operativa/sensibilizacion/:id/informal', editarFicha('informal'));
+
+// --- Archivos (fotos y firmas): listar por módulo y ver la ficha de un archivo ---
+app.get('/archivos', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const filtros = soloCampos(req.query, ['modulo', 'idModulo', 'idPersona', 'folder']);
+  if (!filtros.modulo && !filtros.idPersona) {
+    return res.status(400).json({ success: false, message: 'Indique modulo (y idModulo) o idPersona' });
+  }
+  try {
+    const r = await axios.get(`${sisdepBaseUrl}/api/archivos`, buildAxiosConfig(authToken, filtros));
+    res.status(r.status).json(r.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/archivos');
+  }
+}));
+
+app.get('/archivos/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const r = await axios.get(`${sisdepBaseUrl}/api/archivos/${id}`, buildAxiosConfig(authToken));
+    res.status(r.status).json(r.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/archivos/:id');
   }
 }));
 
