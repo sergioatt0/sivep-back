@@ -230,6 +230,11 @@ app.get('/', (req: Request, res: Response) => {
         description: "Puesto de venta (datos_venta) de un ventero."
       },
       {
+        method: "POST|PATCH",
+        path: "/ventero/datosVenta[/:id]",
+        description: "Puesto de venta (datos_venta) de un ventero: crear/actualizar (incluye idDireccion)."
+      },
+      {
         method: "GET",
         path: "/archivos?modulo=&idModulo= y /archivos/:id",
         description: "Archivos de un registro (fotos, firmas) y ficha de un archivo."
@@ -1424,6 +1429,41 @@ app.get('/ventero/:id/puesto', asyncHandler(async (req: Request, res: Response) 
     res.json(entidades(r.data, 'datosVenta'));
   } catch (error: any) {
     handleProxyError(error, res, 'GET /api/ventero/datosVenta');
+  }
+}));
+
+// Escritura del puesto de venta (datos_venta): el id lo asigna SISDEP, así que
+// se descarta el que envíe el cliente y el resto del cuerpo pasa intacto.
+app.post('/ventero/datosVenta', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const { id, ...datos } = req.body ?? {};
+  try {
+    const upstream = await axios.post(
+      `${sisdepBaseUrl}/api/ventero/datosVenta`,
+      datos,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'POST /api/ventero/datosVenta');
+  }
+}));
+
+app.patch('/ventero/datosVenta/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.patch(
+      `${sisdepBaseUrl}/api/ventero/datosVenta/${id}`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'PATCH /api/ventero/datosVenta/:id');
   }
 }));
 
