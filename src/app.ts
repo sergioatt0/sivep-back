@@ -1532,6 +1532,11 @@ app.post('/operativa/sensibilizacion', asyncHandler(async (req: Request, res: Re
   const { userId } = reclamosDelToken(authToken);
   const datos: Record<string, any> = { completo: false, ...soloCampos(req.body, CAMPOS_SENSIBILIZACION), idUsuario: userId };
   if (typeof datos.numeroSerie === 'string') datos.numeroSerie = datos.numeroSerie.trim();
+  // Si no llega la geometría, se deriva en WKT a partir de lat/long (longitud primero).
+  if ((datos.localizacion === undefined || datos.localizacion === null)
+      && typeof datos.latitud === 'number' && typeof datos.longitud === 'number') {
+    datos.localizacion = `POINT (${datos.longitud} ${datos.latitud})`;
+  }
   const invalido = validarSensibilizacion(datos);
   if (invalido) return res.status(422).json({ success: false, codigo: 'DATOS_INVALIDOS', message: invalido });
   if (typeof userId !== 'number') return res.status(401).json({ success: false, message: 'Token inválido', sesionVencida: true });
@@ -1561,13 +1566,17 @@ app.patch('/operativa/sensibilizacion/:id', asyncHandler(async (req: Request, re
     const actual = entidades(actualResp.data, 'sensibilizacion')[0];
     if (!actual) return res.status(404).json({ success: false, message: 'Sensibilización no encontrada' });
 
+    const cambios = soloCampos(req.body, CAMPOS_SENSIBILIZACION);
     const base = soloCampos(actual, CAMPOS_SENSIBILIZACION);
     // La ubicación vuelve de SISDEP como objeto; se reenvía en WKT a partir de lat/long.
     delete base.localizacion;
-    if (typeof actual.latitud === 'number' && typeof actual.longitud === 'number') {
-      base.localizacion = `POINT (${actual.longitud} ${actual.latitud})`;
+    // Si el payload cambia lat/long, la geometría usa las coordenadas nuevas; el
+    // localizacion explícito del payload gana luego en el merge {...base, ...cambios}.
+    const latitud = typeof cambios.latitud === 'number' ? cambios.latitud : actual.latitud;
+    const longitud = typeof cambios.longitud === 'number' ? cambios.longitud : actual.longitud;
+    if (typeof latitud === 'number' && typeof longitud === 'number') {
+      base.localizacion = `POINT (${longitud} ${latitud})`;
     }
-    const cambios = soloCampos(req.body, CAMPOS_SENSIBILIZACION);
     const datos: Record<string, any> = { ...base, ...cambios, id: Number(id), idUsuario: actual.idUsuario };
     if (typeof datos.numeroSerie === 'string') datos.numeroSerie = datos.numeroSerie.trim();
     const invalido = validarSensibilizacion(datos);
