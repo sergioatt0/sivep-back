@@ -230,6 +230,11 @@ app.get('/', (req: Request, res: Response) => {
         description: "Puesto de venta (datos_venta) de un ventero."
       },
       {
+        method: "POST|PATCH",
+        path: "/ventero/datosVenta[/:id]",
+        description: "Puesto de venta (datos_venta) de un ventero: crear/actualizar (incluye idDireccion)."
+      },
+      {
         method: "GET",
         path: "/archivos?modulo=&idModulo= y /archivos/:id",
         description: "Archivos de un registro (fotos, firmas) y ficha de un archivo."
@@ -1157,10 +1162,14 @@ app.post('/general/direccion/validar', asyncHandler(async (req: Request, res: Re
 app.post('/general/direccion', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
+  const cuerpo: any = { ...(req.body || {}) };
+  if (Object.prototype.hasOwnProperty.call(cuerpo, 'localizacion')) {
+    cuerpo.localizacion = normalizarPunto3D(cuerpo.localizacion);
+  }
   try {
     const upstream = await axios.post(
       `${sisdepBaseUrl}/api/general/direccion`,
-      req.body,
+      cuerpo,
       buildAxiosConfig(authToken)
     );
     res.status(upstream.status).json(upstream.data);
@@ -1204,10 +1213,14 @@ app.patch('/general/direccion/:id', asyncHandler(async (req: Request, res: Respo
   if (!authToken) return;
   const id = requireNumericId(req, res);
   if (!id) return;
+  const cuerpo: any = { ...(req.body || {}) };
+  if (Object.prototype.hasOwnProperty.call(cuerpo, 'localizacion')) {
+    cuerpo.localizacion = normalizarPunto3D(cuerpo.localizacion);
+  }
   try {
     const upstream = await axios.patch(
       `${sisdepBaseUrl}/api/general/direccion/${id}`,
-      req.body,
+      cuerpo,
       buildAxiosConfig(authToken)
     );
     res.status(upstream.status).json(upstream.data);
@@ -1334,6 +1347,30 @@ function soloCampos(origen: any, campos: string[]): Record<string, any> {
   return r;
 }
 
+/**
+ * Normaliza un punto a WKT 3D ("POINT Z (lng lat z)") para SISDEP.
+ * Acepta GeoJSON {type:'Point',coordinates:[lng,lat(,z)]} y WKT 2D "POINT (lng lat)".
+ * Los numeros se mantienen sin reformatear. Cualquier otro valor se devuelve sin cambios.
+ */
+function normalizarPunto3D(valor: any): any {
+  if (valor && typeof valor === 'object' && !Array.isArray(valor)) {
+    if (String(valor.type || '').toLowerCase() !== 'point') return valor;
+    const c = valor.coordinates;
+    if (!Array.isArray(c) || c.length < 2 || c[0] == null || c[1] == null) return valor;
+    const z = c.length > 2 && c[2] != null ? c[2] : 0;
+    return `POINT Z (${c[0]} ${c[1]} ${z})`;
+  }
+  if (typeof valor === 'string') {
+    const m = valor.trim().match(/^POINT\s*(Z\s*)?\(\s*([^)]+?)\s*\)$/i);
+    if (!m || m[1]) return valor;
+    const p = m[2].split(/\s+/);
+    if (p.length < 2 || p.length > 3) return valor;
+    if (!p.every((n) => /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(n))) return valor;
+    return `POINT Z (${p[0]} ${p[1]} ${p[2] ?? '0'})`;
+  }
+  return valor;
+}
+
 /** Filas de una respuesta genérica de SISDEP: {"entities":{"<entidad>":{"<id>":{...}}}}. */
 function entidades(data: any, nombre: string): any[] {
   const m = data?.entities?.[nombre];
@@ -1427,6 +1464,41 @@ app.get('/ventero/:id/puesto', asyncHandler(async (req: Request, res: Response) 
   }
 }));
 
+// Escritura del puesto de venta (datos_venta): el id lo asigna SISDEP, así que
+// se descarta el que envíe el cliente y el resto del cuerpo pasa intacto.
+app.post('/ventero/datosVenta', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const { id, ...datos } = req.body ?? {};
+  try {
+    const upstream = await axios.post(
+      `${sisdepBaseUrl}/api/ventero/datosVenta`,
+      datos,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'POST /api/ventero/datosVenta');
+  }
+}));
+
+app.patch('/ventero/datosVenta/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.patch(
+      `${sisdepBaseUrl}/api/ventero/datosVenta/${id}`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'PATCH /api/ventero/datosVenta/:id');
+  }
+}));
+
 // --- Listados ---
 function proxyListaSensibilizaciones(sufijo: string) {
   return asyncHandler(async (req: Request, res: Response) => {
@@ -1492,6 +1564,11 @@ app.post('/operativa/sensibilizacion', asyncHandler(async (req: Request, res: Re
   const { userId } = reclamosDelToken(authToken);
   const datos: Record<string, any> = { completo: false, ...soloCampos(req.body, CAMPOS_SENSIBILIZACION), idUsuario: userId };
   if (typeof datos.numeroSerie === 'string') datos.numeroSerie = datos.numeroSerie.trim();
+  // Si no llega la geometría, se deriva en WKT a partir de lat/long (longitud primero).
+  if ((datos.localizacion === undefined || datos.localizacion === null)
+      && typeof datos.latitud === 'number' && typeof datos.longitud === 'number') {
+    datos.localizacion = `POINT (${datos.longitud} ${datos.latitud})`;
+  }
   const invalido = validarSensibilizacion(datos);
   if (invalido) return res.status(422).json({ success: false, codigo: 'DATOS_INVALIDOS', message: invalido });
   if (typeof userId !== 'number') return res.status(401).json({ success: false, message: 'Token inválido', sesionVencida: true });
@@ -1521,13 +1598,17 @@ app.patch('/operativa/sensibilizacion/:id', asyncHandler(async (req: Request, re
     const actual = entidades(actualResp.data, 'sensibilizacion')[0];
     if (!actual) return res.status(404).json({ success: false, message: 'Sensibilización no encontrada' });
 
+    const cambios = soloCampos(req.body, CAMPOS_SENSIBILIZACION);
     const base = soloCampos(actual, CAMPOS_SENSIBILIZACION);
     // La ubicación vuelve de SISDEP como objeto; se reenvía en WKT a partir de lat/long.
     delete base.localizacion;
-    if (typeof actual.latitud === 'number' && typeof actual.longitud === 'number') {
-      base.localizacion = `POINT (${actual.longitud} ${actual.latitud})`;
+    // Si el payload cambia lat/long, la geometría usa las coordenadas nuevas; el
+    // localizacion explícito del payload gana luego en el merge {...base, ...cambios}.
+    const latitud = typeof cambios.latitud === 'number' ? cambios.latitud : actual.latitud;
+    const longitud = typeof cambios.longitud === 'number' ? cambios.longitud : actual.longitud;
+    if (typeof latitud === 'number' && typeof longitud === 'number') {
+      base.localizacion = `POINT (${longitud} ${latitud})`;
     }
-    const cambios = soloCampos(req.body, CAMPOS_SENSIBILIZACION);
     const datos: Record<string, any> = { ...base, ...cambios, id: Number(id), idUsuario: actual.idUsuario };
     if (typeof datos.numeroSerie === 'string') datos.numeroSerie = datos.numeroSerie.trim();
     const invalido = validarSensibilizacion(datos);

@@ -168,6 +168,22 @@ describe('Sensibilizaciones (proxy a SISDEP)', () => {
       assert.equal(llamadas('POST', '/api/operativa/sensibilizacion').length, 0);
     });
 
+    test('deriva localizacion (WKT) desde latitud/longitud si no se envía', async () => {
+      const { localizacion, ...sinGeometria } = nn;
+      const { status } = await httpRequest(port, 'POST', '/operativa/sensibilizacion', { 'x-access': CON_PERMISO }, sinGeometria);
+      assert.equal(status, 201);
+      const enviado = llamadas('POST', '/api/operativa/sensibilizacion')[0].body;
+      assert.equal(enviado.localizacion, 'POINT (-75.5 6.2)');
+    });
+
+    test('conserva la localizacion explícita si se envía', async () => {
+      const { status } = await httpRequest(port, 'POST', '/operativa/sensibilizacion', { 'x-access': CON_PERMISO },
+        { ...nn, localizacion: 'POINT (-75.4 6.1)' });
+      assert.equal(status, 201);
+      const enviado = llamadas('POST', '/api/operativa/sensibilizacion')[0].body;
+      assert.equal(enviado.localizacion, 'POINT (-75.4 6.1)');
+    });
+
     test('sin token: 401', async () => {
       const { status } = await httpRequest(port, 'POST', '/operativa/sensibilizacion', {}, nn);
       assert.equal(status, 401);
@@ -195,6 +211,16 @@ describe('Sensibilizaciones (proxy a SISDEP)', () => {
       assert.equal(enviado.motivo_cambio, 'Cierre de acta');
       assert.equal(enviado.esNn, undefined);
       assert.equal(enviado.territorio, undefined);
+    });
+
+    test('al cambiar latitud/longitud recalcula localizacion con las coordenadas nuevas', async () => {
+      const { status } = await httpRequest(port, 'PATCH', '/operativa/sensibilizacion/100', { 'x-access': CON_PERMISO },
+        { latitud: 6.3, longitud: -75.6 });
+      assert.equal(status, 200);
+      const enviado = llamadas('PATCH', '/api/operativa/sensibilizacion/100')[0].body;
+      assert.equal(enviado.localizacion, 'POINT (-75.6 6.3)');
+      assert.equal(enviado.latitud, 6.3);
+      assert.equal(enviado.longitud, -75.6);
     });
 
     test('grupo 0 (administrador) no consulta permisos', async () => {
