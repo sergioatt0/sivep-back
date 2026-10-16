@@ -287,7 +287,7 @@ describe('Dirección proxy', () => {
       assert.equal(status, 200);
       assert.ok(body.id);
       assert.equal(body.complemento, 'Apto 301');
-      assert.deepEqual(body.localizacion, { type: 'Point', coordinates: [-75.5814, 6.2476] });
+      assert.equal(body.localizacion, 'POINT Z (-75.5814 6.2476 0)');
     });
 
     test('propaga 409 cuando hay duplicado upstream', async () => {
@@ -303,6 +303,57 @@ describe('Dirección proxy', () => {
     test('401 sin x-access', async () => {
       const { status } = await rawHttp(appPort, 'POST', '/general/direccion', {}, { cruceDesde: 1 });
       assert.equal(status, 401);
+    });
+  });
+
+  // ---------- localizacion: normalización a WKT 3D ----------
+  describe('localizacion se normaliza a WKT 3D', () => {
+    async function enviarPost(localizacion) {
+      sisdep.setMode('ok');
+      sisdep.clearRequests();
+      const payload = { cruceDesde: 1, numeroDesde: 50, cruceHasta: 2, numeroHasta: 30, idMunicipio: 1 };
+      if (localizacion !== undefined) payload.localizacion = localizacion;
+      await rawHttp(appPort, 'POST', '/general/direccion', { 'x-access': 'tok' }, payload);
+      return sisdep.requests.at(-1).body;
+    }
+
+    test('POST GeoJSON 2D -> POINT Z (lng lat 0)', async () => {
+      const saliente = await enviarPost({ type: 'Point', coordinates: [-75.5814, 6.2476] });
+      assert.equal(saliente.localizacion, 'POINT Z (-75.5814 6.2476 0)');
+    });
+
+    test('POST GeoJSON 3D conserva z', async () => {
+      const saliente = await enviarPost({ type: 'Point', coordinates: [-75.5814, 6.2476, 1234] });
+      assert.equal(saliente.localizacion, 'POINT Z (-75.5814 6.2476 1234)');
+    });
+
+    test('POST WKT 2D -> POINT Z (lng lat 0)', async () => {
+      const saliente = await enviarPost('POINT (-75.5814 6.2476)');
+      assert.equal(saliente.localizacion, 'POINT Z (-75.5814 6.2476 0)');
+    });
+
+    test('POST WKT 2D con espacios extra', async () => {
+      const saliente = await enviarPost('  POINT( -75.5814   6.2476 )  ');
+      assert.equal(saliente.localizacion, 'POINT Z (-75.5814 6.2476 0)');
+    });
+
+    test('POST WKT 3D se reenvía sin cambios', async () => {
+      const saliente = await enviarPost('POINT Z (-75.5814 6.2476 9)');
+      assert.equal(saliente.localizacion, 'POINT Z (-75.5814 6.2476 9)');
+    });
+
+    test('POST sin localizacion no agrega el campo', async () => {
+      const saliente = await enviarPost(undefined);
+      assert.equal(Object.prototype.hasOwnProperty.call(saliente, 'localizacion'), false);
+    });
+
+    test('PATCH GeoJSON 2D -> POINT Z (lng lat 0)', async () => {
+      sisdep.setMode('ok');
+      sisdep.clearRequests();
+      const { status } = await rawHttp(appPort, 'PATCH', '/general/direccion/5', { 'x-access': 'tok' },
+        { complemento: 'Casa 2', localizacion: { type: 'Point', coordinates: [-75.5, 6.25] } });
+      assert.equal(status, 200);
+      assert.equal(sisdep.requests.at(-1).body.localizacion, 'POINT Z (-75.5 6.25 0)');
     });
   });
 

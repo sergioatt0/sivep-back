@@ -1162,10 +1162,14 @@ app.post('/general/direccion/validar', asyncHandler(async (req: Request, res: Re
 app.post('/general/direccion', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
+  const cuerpo: any = { ...(req.body || {}) };
+  if (Object.prototype.hasOwnProperty.call(cuerpo, 'localizacion')) {
+    cuerpo.localizacion = normalizarPunto3D(cuerpo.localizacion);
+  }
   try {
     const upstream = await axios.post(
       `${sisdepBaseUrl}/api/general/direccion`,
-      req.body,
+      cuerpo,
       buildAxiosConfig(authToken)
     );
     res.status(upstream.status).json(upstream.data);
@@ -1209,10 +1213,14 @@ app.patch('/general/direccion/:id', asyncHandler(async (req: Request, res: Respo
   if (!authToken) return;
   const id = requireNumericId(req, res);
   if (!id) return;
+  const cuerpo: any = { ...(req.body || {}) };
+  if (Object.prototype.hasOwnProperty.call(cuerpo, 'localizacion')) {
+    cuerpo.localizacion = normalizarPunto3D(cuerpo.localizacion);
+  }
   try {
     const upstream = await axios.patch(
       `${sisdepBaseUrl}/api/general/direccion/${id}`,
-      req.body,
+      cuerpo,
       buildAxiosConfig(authToken)
     );
     res.status(upstream.status).json(upstream.data);
@@ -1337,6 +1345,30 @@ function soloCampos(origen: any, campos: string[]): Record<string, any> {
   const r: Record<string, any> = {};
   for (const c of campos) if (origen && Object.prototype.hasOwnProperty.call(origen, c)) r[c] = origen[c];
   return r;
+}
+
+/**
+ * Normaliza un punto a WKT 3D ("POINT Z (lng lat z)") para SISDEP.
+ * Acepta GeoJSON {type:'Point',coordinates:[lng,lat(,z)]} y WKT 2D "POINT (lng lat)".
+ * Los numeros se mantienen sin reformatear. Cualquier otro valor se devuelve sin cambios.
+ */
+function normalizarPunto3D(valor: any): any {
+  if (valor && typeof valor === 'object' && !Array.isArray(valor)) {
+    if (String(valor.type || '').toLowerCase() !== 'point') return valor;
+    const c = valor.coordinates;
+    if (!Array.isArray(c) || c.length < 2 || c[0] == null || c[1] == null) return valor;
+    const z = c.length > 2 && c[2] != null ? c[2] : 0;
+    return `POINT Z (${c[0]} ${c[1]} ${z})`;
+  }
+  if (typeof valor === 'string') {
+    const m = valor.trim().match(/^POINT\s*(Z\s*)?\(\s*([^)]+?)\s*\)$/i);
+    if (!m || m[1]) return valor;
+    const p = m[2].split(/\s+/);
+    if (p.length < 2 || p.length > 3) return valor;
+    if (!p.every((n) => /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(n))) return valor;
+    return `POINT Z (${p[0]} ${p[1]} ${p[2] ?? '0'})`;
+  }
+  return valor;
 }
 
 /** Filas de una respuesta genérica de SISDEP: {"entities":{"<entidad>":{"<id>":{...}}}}. */
