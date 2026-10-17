@@ -4,22 +4,39 @@
 process.env.NODE_ENV = 'test';
 process.env.ALLOWED_ORIGINS = 'http://localhost:3000';
 
-const { test, before, after, describe } = require('node:test');
+const { test, before, after, beforeEach, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 
+const PUESTO_ID = 55;
+const VENTERO_ID = 300;
+
 const DATOS_VENTA_FIXTURE = {
-  id: 55,
-  idVentero: 300,
+  id: PUESTO_ID,
+  idVentero: VENTERO_ID,
+  idClaseVenta: 1,
+  desActividadEconomica: 'Comercio al por menor',
   idDireccion: 100123,
   nombreEstablecimiento: 'Tienda Doña Ana',
   observaciones: null
 };
 
+/**
+ * Mock con estado de SISDEP. Ahora el POST del proxy es un upsert: primero lee
+ * el puesto del ventero (GET por idVentero) y, si existe, actualiza con PATCH.
+ */
 function startSisdepMock() {
   return new Promise((resolve) => {
-    let mode = 'ok'; // 'ok' | 'conflict'
+    let mode = 'ok'; // 'ok' | 'conflict' | 'reglaNegocio' | 'sinPermiso' | 'getDetalleFalla'
+    let puestos;
+    let siguienteId;
     const requests = [];
+
+    const reset = () => {
+      puestos = { [PUESTO_ID]: { ...DATOS_VENTA_FIXTURE } };
+      siguienteId = PUESTO_ID + 1;
+    };
+    reset();
 
     const server = http.createServer((req, res) => {
       const chunks = [];
@@ -40,33 +57,86 @@ function startSisdepMock() {
 
         res.setHeader('Content-Type', 'application/json');
 
-        // ---- GET /datosVenta (puesto actual) ----
-        if (req.method === 'GET' && /^\/api\/ventero\/datosVenta(\?.*)?$/.test(req.url)) {
+        // ---- Catálogo de clase de venta ----
+        if (req.method === 'GET' && /^\/api\/dominios\/claseVenta(\?.*)?$/.test(req.url)) {
           res.statusCode = 200;
           return res.end(JSON.stringify({
-            entities: { datosVenta: { 55: { ...DATOS_VENTA_FIXTURE } } }
+            entities: { claseVenta: {
+              1: { id: 1, descripcion: 'Ambulante' },
+              2: { id: 2, descripcion: 'Semiestacionaria' },
+              3: { id: 3, descripcion: 'Estacionaria' }
+            } }
           }));
+        }
+
+        // ---- GET /datosVenta (lista por idVentero) ----
+        if (req.method === 'GET' && /^\/api\/ventero\/datosVenta(\?.*)?$/.test(req.url)) {
+          const idVentero = new URL(req.url, 'http://x').searchParams.get('idVentero');
+          const filas = Object.values(puestos)
+            .filter((x) => !idVentero || String(x.idVentero) === String(idVentero));
+          res.statusCode = 200;
+          return res.end(JSON.stringify({
+            entities: { datosVenta: Object.fromEntries(filas.map((f) => [f.id, f])) }
+          }));
+        }
+
+        const porId = req.url.match(/^\/api\/ventero\/datosVenta\/(\d+)$/);
+
+        // ---- GET /datosVenta/:id (puesto actual) ----
+        if (req.method === 'GET' && porId) {
+          if (mode === 'getDetalleFalla') {
+            res.statusCode = 500;
+            return res.end(JSON.stringify({ message: 'Error interno' }));
+          }
+          const actual = puestos[Number(porId[1])];
+          if (!actual) {
+            res.statusCode = 404;
+            return res.end(JSON.stringify({ errors: [{ title: 'No encontrado', detail: 'Puesto no encontrado' }] }));
+          }
+          res.statusCode = 200;
+          return res.end(JSON.stringify(actual));
         }
 
         // ---- POST /datosVenta (crear) ----
         if (req.method === 'POST' && req.url === '/api/ventero/datosVenta') {
+          if (mode === 'sinPermiso') {
+            res.statusCode = 403;
+            return res.end(JSON.stringify({ message: 'No autorizado' }));
+          }
           if (mode === 'conflict') {
             res.statusCode = 409;
             return res.end(JSON.stringify({ message: 'El ventero ya tiene un puesto de venta' }));
           }
+          const nuevo = { ...(body || {}), id: siguienteId++ };
+          puestos[nuevo.id] = nuevo;
           res.statusCode = 201;
-          return res.end(JSON.stringify({ ...DATOS_VENTA_FIXTURE, ...(body || {}) }));
+          return res.end(JSON.stringify(nuevo));
         }
 
         // ---- PATCH /datosVenta/:id ----
-        const patchMatch = req.url.match(/^\/api\/ventero\/datosVenta\/(\d+)$/);
-        if (req.method === 'PATCH' && patchMatch) {
+        if (req.method === 'PATCH' && porId) {
+          const id = Number(porId[1]);
+          if (mode === 'sinPermiso') {
+            res.statusCode = 403;
+            return res.end(JSON.stringify({ message: 'No autorizado' }));
+          }
           if (mode === 'conflict') {
             res.statusCode = 409;
             return res.end(JSON.stringify({ message: 'El ventero ya tiene un puesto de venta' }));
           }
+          if (mode === 'reglaNegocio') {
+            res.statusCode = 409;
+            return res.end(JSON.stringify({ detail: 'La operación viola una regla de negocio.' }));
+          }
+          const actual = puestos[id];
+          if (!actual) {
+            res.statusCode = 404;
+            return res.end(JSON.stringify({ errors: [{ title: 'No encontrado', detail: 'Puesto no encontrado' }] }));
+          }
+          const { id: _ignorado, ...cambios } = body || {};
+          Object.assign(actual, cambios);
           res.statusCode = 200;
-          return res.end(JSON.stringify({ ...DATOS_VENTA_FIXTURE, id: Number(patchMatch[1]), ...(body || {}) }));
+          return res.end(JSON.stringify(actual));
         }
 
         res.statusCode = 404;
@@ -79,6 +149,9 @@ function startSisdepMock() {
         server,
         port: server.address().port,
         setMode: (m) => { mode = m; },
+        reset: () => { reset(); requests.length = 0; mode = 'ok'; },
+        borrarPuesto: (id) => { delete puestos[id]; },
+        getPuesto: (id) => puestos[id],
         requests,
         clearRequests: () => { requests.length = 0; }
       });
@@ -120,79 +193,190 @@ describe('Puesto de venta (datos_venta) proxy', () => {
     appPort = appServer.address().port;
   });
 
+  beforeEach(() => sisdep.reset());
+
   after(async () => {
     await new Promise((r) => appServer.close(r));
     await new Promise((r) => sisdep.server.close(r));
   });
 
-  // ---------- POST /ventero/datosVenta ----------
+  // ---------- POST /ventero/datosVenta (upsert) ----------
   describe('POST /ventero/datosVenta', () => {
-    test('201 reenvía el cuerpo (idVentero + idDireccion) a /api/ventero/datosVenta', async () => {
-      sisdep.setMode('ok');
-      sisdep.clearRequests();
-      const payload = { idVentero: 300, idDireccion: 100123, nombreEstablecimiento: 'Tienda Doña Ana' };
+    test('upsert: con puesto existente hace PATCH fusionado con el id y devuelve su respuesta', async () => {
+      const payload = { idVentero: VENTERO_ID, idDireccion: 100123, nombreEstablecimiento: 'Tienda Doña Ana' };
+      const { status, body } = await httpRequest(appPort, 'POST', '/ventero/datosVenta', { 'x-access': 'tok' }, payload);
+      assert.equal(status, 200);
+
+      const last = sisdep.requests.at(-1);
+      assert.equal(last.method, 'PATCH');
+      assert.equal(last.path, `/api/ventero/datosVenta/${PUESTO_ID}`);
+      assert.equal(last.body.id, PUESTO_ID, 'SISDEP exige el id de la ruta en el cuerpo');
+      assert.equal(last.body.idVentero, VENTERO_ID);
+      assert.equal(last.body.idClaseVenta, 1, 'conserva los valores actuales');
+      assert.equal(last.body.idDireccion, 100123);
+
+      assert.equal(body.idVentero, VENTERO_ID);
+      assert.equal(body.idDireccion, 100123);
+    });
+
+    test('crea (201) cuando el ventero no tiene puesto, con los campos obligatorios', async () => {
+      sisdep.borrarPuesto(PUESTO_ID);
+      const payload = { idVentero: VENTERO_ID, idClaseVenta: 2, desActividadEconomica: 'Semiestacionaria', idDireccion: 100123 };
       const { status, body } = await httpRequest(appPort, 'POST', '/ventero/datosVenta', { 'x-access': 'tok' }, payload);
       assert.equal(status, 201);
 
       const last = sisdep.requests.at(-1);
       assert.equal(last.method, 'POST');
       assert.equal(last.path, '/api/ventero/datosVenta');
-      assert.equal(last.body.idVentero, 300);
-      assert.equal(last.body.idDireccion, 100123);
-      assert.equal(last.body.nombreEstablecimiento, 'Tienda Doña Ana');
-
-      // La respuesta del upstream se devuelve tal cual
-      assert.equal(body.idVentero, 300);
-      assert.equal(body.idDireccion, 100123);
+      assert.equal(last.body.id, undefined, 'SISDEP asigna el id');
+      assert.equal(last.body.idVentero, VENTERO_ID);
+      assert.equal(last.body.idClaseVenta, 2);
+      assert.equal(body.idVentero, VENTERO_ID);
     });
 
-    test('descarta el id del cuerpo: SISDEP lo asigna', async () => {
-      sisdep.setMode('ok');
-      sisdep.clearRequests();
+    test('descarta el id del cuerpo: en el upsert manda el id existente', async () => {
       await httpRequest(appPort, 'POST', '/ventero/datosVenta',
-        { 'x-access': 'tok' }, { id: 999, idVentero: 300, idDireccion: 100123 });
+        { 'x-access': 'tok' }, { id: 999, idVentero: VENTERO_ID, idDireccion: 100123 });
       const last = sisdep.requests.at(-1);
-      assert.equal(last.body.id, undefined);
-      assert.equal(last.body.idVentero, 300);
-      assert.equal(last.body.idDireccion, 100123);
+      assert.equal(last.path, `/api/ventero/datosVenta/${PUESTO_ID}`);
+      assert.equal(last.body.id, PUESTO_ID);
+      assert.equal(last.body.idVentero, VENTERO_ID);
+    });
+
+    test('422 al crear sin idVentero (no llama a SISDEP)', async () => {
+      sisdep.borrarPuesto(PUESTO_ID);
+      sisdep.clearRequests();
+      const { status, body } = await httpRequest(appPort, 'POST', '/ventero/datosVenta',
+        { 'x-access': 'tok' }, { idClaseVenta: 1, desActividadEconomica: 'Comercio' });
+      assert.equal(status, 422);
+      assert.equal(body.success, false);
+      assert.equal(body.codigo, 'DATOS_INVALIDOS');
+      assert.match(body.message, /idVentero/);
+      assert.equal(sisdep.requests.length, 0);
+    });
+
+    test('422 al crear sin idClaseVenta', async () => {
+      sisdep.borrarPuesto(PUESTO_ID);
+      const { status, body } = await httpRequest(appPort, 'POST', '/ventero/datosVenta',
+        { 'x-access': 'tok' }, { idVentero: VENTERO_ID, desActividadEconomica: 'Comercio' });
+      assert.equal(status, 422);
+      assert.match(body.message, /idClaseVenta/);
+    });
+
+    test('422 al crear con desActividadEconomica vacía', async () => {
+      sisdep.borrarPuesto(PUESTO_ID);
+      const { status, body } = await httpRequest(appPort, 'POST', '/ventero/datosVenta',
+        { 'x-access': 'tok' }, { idVentero: VENTERO_ID, idClaseVenta: 1, desActividadEconomica: '   ' });
+      assert.equal(status, 422);
+      assert.match(body.message, /desActividadEconomica/);
+    });
+
+    test('422 al crear con idClaseVenta fuera del catálogo (no llama a SISDEP)', async () => {
+      sisdep.borrarPuesto(PUESTO_ID);
+      sisdep.clearRequests();
+      const { status, body } = await httpRequest(appPort, 'POST', '/ventero/datosVenta',
+        { 'x-access': 'tok' }, { idVentero: VENTERO_ID, idClaseVenta: 4, desActividadEconomica: 'Comercio' });
+      assert.equal(status, 422);
+      assert.equal(body.codigo, 'DATOS_INVALIDOS');
+      assert.match(body.message, /idClaseVenta/);
+      assert.equal(sisdep.requests.filter((r) => r.method === 'POST').length, 0);
     });
 
     test('propaga 409 cuando el ventero ya tiene puesto', async () => {
       sisdep.setMode('conflict');
       const { status, body } = await httpRequest(appPort, 'POST', '/ventero/datosVenta',
-        { 'x-access': 'tok' }, { idVentero: 300, idDireccion: 100123 });
+        { 'x-access': 'tok' }, { idVentero: VENTERO_ID, idDireccion: 100123 });
       assert.equal(status, 409);
       assert.equal(body.success, false);
       assert.match(body.message, /ya tiene un puesto/);
     });
 
+    test('403 de SISDEP: mensaje claro de permiso sobre el puesto de venta', async () => {
+      sisdep.setMode('sinPermiso');
+      const { status, body } = await httpRequest(appPort, 'POST', '/ventero/datosVenta',
+        { 'x-access': 'tok' }, { idVentero: VENTERO_ID, idDireccion: 100123 });
+      assert.equal(status, 403);
+      assert.equal(body.success, false);
+      assert.match(body.message, /Sin permiso para escribir el puesto de venta/);
+    });
+
     test('401 sin x-access', async () => {
-      sisdep.setMode('ok');
-      const { status } = await httpRequest(appPort, 'POST', '/ventero/datosVenta', {}, { idVentero: 300 });
+      const { status } = await httpRequest(appPort, 'POST', '/ventero/datosVenta', {}, { idVentero: VENTERO_ID });
       assert.equal(status, 401);
     });
   });
 
   // ---------- PATCH /ventero/datosVenta/:id ----------
   describe('PATCH /ventero/datosVenta/:id', () => {
-    test('200 reenvía el cuerpo a /api/ventero/datosVenta/<id> y devuelve la respuesta', async () => {
-      sisdep.setMode('ok');
-      sisdep.clearRequests();
-      const { status, body } = await httpRequest(appPort, 'PATCH', '/ventero/datosVenta/55',
+    test('200 envía el registro fusionado (id de la ruta + cambios) y devuelve la respuesta', async () => {
+      const { status, body } = await httpRequest(appPort, 'PATCH', `/ventero/datosVenta/${PUESTO_ID}`,
         { 'x-access': 'tok' }, { idDireccion: 100123 });
       assert.equal(status, 200);
 
       const last = sisdep.requests.at(-1);
       assert.equal(last.method, 'PATCH');
-      assert.equal(last.path, '/api/ventero/datosVenta/55');
+      assert.equal(last.path, `/api/ventero/datosVenta/${PUESTO_ID}`);
+      assert.equal(last.body.id, PUESTO_ID);
+      assert.equal(last.body.idVentero, VENTERO_ID, 'completa con el registro actual');
+      assert.equal(last.body.idClaseVenta, 1);
       assert.equal(last.body.idDireccion, 100123);
 
-      assert.equal(body.id, 55);
+      assert.equal(body.id, PUESTO_ID);
       assert.equal(body.idDireccion, 100123);
     });
 
+    test('no envía null en las columnas NOT NULL: conserva el valor actual', async () => {
+      const { status } = await httpRequest(appPort, 'PATCH', `/ventero/datosVenta/${PUESTO_ID}`,
+        { 'x-access': 'tok' }, { idClaseVenta: null, idDireccion: 555 });
+      assert.equal(status, 200);
+
+      const last = sisdep.requests.at(-1);
+      assert.equal(Object.prototype.hasOwnProperty.call(last.body, 'idClaseVenta'), false);
+      assert.equal(last.body.idDireccion, 555);
+      assert.equal(sisdep.getPuesto(PUESTO_ID).idClaseVenta, 1);
+    });
+
+    test('fail-open: si no se puede leer el puesto, igual inyecta el id y reenvía', async () => {
+      sisdep.setMode('getDetalleFalla');
+      const { status } = await httpRequest(appPort, 'PATCH', `/ventero/datosVenta/${PUESTO_ID}`,
+        { 'x-access': 'tok' }, { idDireccion: 777 });
+      assert.equal(status, 200);
+
+      const last = sisdep.requests.at(-1);
+      assert.equal(last.path, `/api/ventero/datosVenta/${PUESTO_ID}`);
+      assert.equal(last.body.id, PUESTO_ID);
+      assert.equal(last.body.idDireccion, 777);
+      assert.equal(Object.prototype.hasOwnProperty.call(last.body, 'idVentero'), false);
+    });
+
+    test('422 con idClaseVenta fuera del catálogo (no llama a SISDEP)', async () => {
+      sisdep.clearRequests();
+      const { status, body } = await httpRequest(appPort, 'PATCH', `/ventero/datosVenta/${PUESTO_ID}`,
+        { 'x-access': 'tok' }, { idClaseVenta: 4, desActividadEconomica: 'Comercio' });
+      assert.equal(status, 422);
+      assert.equal(body.codigo, 'DATOS_INVALIDOS');
+      assert.match(body.message, /idClaseVenta/);
+      assert.equal(sisdep.requests.filter((r) => r.method === 'PATCH').length, 0);
+    });
+
+    test('409 genérico con idClaseVenta en el cuerpo: 422 nombrando el campo', async () => {
+      sisdep.setMode('reglaNegocio');
+      const { status, body } = await httpRequest(appPort, 'PATCH', `/ventero/datosVenta/${PUESTO_ID}`,
+        { 'x-access': 'tok' }, { idClaseVenta: 1, desActividadEconomica: 'Comercio' });
+      assert.equal(status, 422);
+      assert.equal(body.codigo, 'DATOS_INVALIDOS');
+      assert.match(body.message, /idClaseVenta/);
+    });
+
+    test('403 de SISDEP: mensaje claro de permiso sobre el puesto de venta', async () => {
+      sisdep.setMode('sinPermiso');
+      const { status, body } = await httpRequest(appPort, 'PATCH', `/ventero/datosVenta/${PUESTO_ID}`,
+        { 'x-access': 'tok' }, { idDireccion: 100123 });
+      assert.equal(status, 403);
+      assert.match(body.message, /Sin permiso para escribir el puesto de venta/);
+    });
+
     test('400 con id no numérico', async () => {
-      sisdep.setMode('ok');
       const { status, body } = await httpRequest(appPort, 'PATCH', '/ventero/datosVenta/abc',
         { 'x-access': 'tok' }, { idDireccion: 100123 });
       assert.equal(status, 400);
@@ -201,15 +385,14 @@ describe('Puesto de venta (datos_venta) proxy', () => {
 
     test('propaga 409 cuando el ventero ya tiene puesto', async () => {
       sisdep.setMode('conflict');
-      const { status, body } = await httpRequest(appPort, 'PATCH', '/ventero/datosVenta/55',
+      const { status, body } = await httpRequest(appPort, 'PATCH', `/ventero/datosVenta/${PUESTO_ID}`,
         { 'x-access': 'tok' }, { idDireccion: 100123 });
       assert.equal(status, 409);
       assert.equal(body.success, false);
     });
 
     test('401 sin x-access', async () => {
-      sisdep.setMode('ok');
-      const { status } = await httpRequest(appPort, 'PATCH', '/ventero/datosVenta/55', {}, { idDireccion: 100123 });
+      const { status } = await httpRequest(appPort, 'PATCH', `/ventero/datosVenta/${PUESTO_ID}`, {}, { idDireccion: 100123 });
       assert.equal(status, 401);
     });
   });
@@ -217,12 +400,11 @@ describe('Puesto de venta (datos_venta) proxy', () => {
   // ---------- GET /ventero/:id/puesto (lectura existente) ----------
   describe('GET /ventero/:id/puesto', () => {
     test('200 devuelve la lista de datosVenta del ventero', async () => {
-      sisdep.setMode('ok');
       sisdep.clearRequests();
-      const { status, body } = await httpRequest(appPort, 'GET', '/ventero/300/puesto', { 'x-access': 'tok' });
+      const { status, body } = await httpRequest(appPort, 'GET', `/ventero/${VENTERO_ID}/puesto`, { 'x-access': 'tok' });
       assert.equal(status, 200);
       assert.ok(Array.isArray(body));
-      assert.equal(body[0].id, 55);
+      assert.equal(body[0].id, PUESTO_ID);
 
       const last = sisdep.requests.at(-1);
       assert.equal(last.method, 'GET');

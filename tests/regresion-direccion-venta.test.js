@@ -359,16 +359,16 @@ describe('Regresión: dirección -> puesto de venta -> sensibilización', () => 
       assert.equal(sisdep.state.puestos[PUESTO_ID].idDireccion, DIRECCION_ID);
     });
 
-    // Documenta el comportamiento actual: a diferencia del POST, el PATCH no
-    // descarta el id del cuerpo (viaja tal cual a SISDEP).
-    test('documenta: el PATCH no descarta el id del cuerpo', async () => {
+    // El PATCH ahora impone el id de la URL: SISDEP rechaza el cuerpo cuando el
+    // id no coincide con el de la ruta.
+    test('el PATCH impone el id de la URL en el cuerpo', async () => {
       sisdep.clearRequests();
       await httpRequest(port, 'PATCH', `/ventero/datosVenta/${PUESTO_ID}`, { 'x-access': 'tok' },
         { id: 999, idDireccion: DIRECCION_ID });
       const enviado = ultimo();
       assert.equal(enviado.path, `/api/ventero/datosVenta/${PUESTO_ID}`);
-      assert.equal(enviado.body.id, 999);
-      assert.equal(sisdep.state.puestos[PUESTO_ID].id, PUESTO_ID, 'el mock ignora el id del cuerpo');
+      assert.equal(enviado.body.id, PUESTO_ID);
+      assert.equal(sisdep.state.puestos[PUESTO_ID].id, PUESTO_ID);
     });
   });
 

@@ -1348,6 +1348,16 @@ function soloCampos(origen: any, campos: string[]): Record<string, any> {
 }
 
 /**
+ * Nombres de las claves de un objeto que no están en la lista permitida (más
+ * las excepciones que sí se reenvían por otra vía). Sirve para registrar las
+ * pérdidas silenciosas al reenviar: solo nombres, nunca valores.
+ */
+function clavesDescartadas(origen: any, permitidas: string[], excepto: string[] = []): string[] {
+  if (!origen || typeof origen !== 'object') return [];
+  return Object.keys(origen).filter((c) => !permitidas.includes(c) && !excepto.includes(c));
+}
+
+/**
  * Normaliza un punto a WKT 3D ("POINT Z (lng lat z)") para SISDEP.
  * Acepta GeoJSON {type:'Point',coordinates:[lng,lat(,z)]} y WKT 2D "POINT (lng lat)".
  * Los numeros se mantienen sin reformatear. Cualquier otro valor se devuelve sin cambios.
@@ -1464,12 +1474,175 @@ app.get('/ventero/:id/puesto', asyncHandler(async (req: Request, res: Response) 
   }
 }));
 
-// Escritura del puesto de venta (datos_venta): el id lo asigna SISDEP, así que
-// se descarta el que envíe el cliente y el resto del cuerpo pasa intacto.
+// ============================================================
+// Escritura del puesto de venta (datos_venta)
+//
+// SISDEP exige que el cuerpo del PATCH traiga el mismo `id` de la ruta, y su
+// update escribe solo las claves presentes: una clave con null borra la columna.
+// `datos_venta` tiene NOT NULL en idClaseVenta, idVentero y desActividadEconomica,
+// y su id_ventero es UNIQUE, así que el POST se vuelve idempotente (upsert):
+// se lee el puesto actual, se fusiona y, si ya existe, se actualiza con PATCH.
+// ============================================================
+
+/** Columnas NOT NULL de datos_venta: un null explícito rompe la escritura en SISDEP. */
+const CAMPOS_PUESTO_NO_NULOS = ['idClaseVenta', 'idVentero', 'desActividadEconomica'];
+
+/** Número entero (acepta "300" del front; rechaza null, decimales y texto). */
+function enteroDe(valor: any): number | null {
+  if (typeof valor === 'number') return Number.isInteger(valor) ? valor : null;
+  if (typeof valor === 'string' && /^[+-]?\d+$/.test(valor.trim())) return Number(valor);
+  return null;
+}
+
+/** Un puesto de datos_venta desde la respuesta de SISDEP (entidad suelta o entities). */
+function unPuesto(data: any): Record<string, any> | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  if (data.entities) return entidades(data, 'datosVenta')[0] ?? null;
+  return data;
+}
+
+/**
+ * Fusión para el PATCH: el registro actual primero (para completar lo que no
+ * llega), los cambios encima y el id de la ruta. Después se quitan los null de
+ * las columnas NOT NULL, que SISDEP escribiría como NULL.
+ */
+function fusionarPuesto(actual: Record<string, any> | null, cambios: Record<string, any>, id: number): Record<string, any> {
+  const datos: Record<string, any> = { ...(actual ?? {}), ...(cambios ?? {}), id };
+  for (const campo of CAMPOS_PUESTO_NO_NULOS) {
+    if (datos[campo] === null) delete datos[campo];
+  }
+  return datos;
+}
+
+/** Detalle de error de SISDEP: {"errors":[{"detail"}]}, {"detail"} o {"message"}. */
+function detalleSisdep(data: any): string {
+  const primero = Array.isArray(data?.errors) ? data.errors[0] : undefined;
+  const detalle = primero?.detail || primero?.title || data?.detail || data?.message;
+  return typeof detalle === 'string' ? detalle : '';
+}
+
+const TTL_CATALOGO_CLASE_VENTA = 5 * 60 * 1000; // 5 minutos
+let cacheClaseVenta: { ids: number[]; expira: number } | null = null;
+
+/**
+ * Ids válidos del catálogo de clase de venta, con caché de 5 minutos.
+ * Devuelve null cuando el catálogo no responde o viene vacío: en ese caso no se
+ * bloquea la escritura (fail-open) y SISDEP decide.
+ */
+async function idsClaseVenta(authToken: string | string[]): Promise<number[] | null> {
+  if (cacheClaseVenta && cacheClaseVenta.expira > Date.now()) return cacheClaseVenta.ids;
+  try {
+    const r = await axios.get(`${sisdepBaseUrl}/api/dominios/claseVenta`, buildAxiosConfig(authToken));
+    const filas = Array.isArray(r.data) ? r.data : entidades(r.data, 'claseVenta');
+    const ids = filas.map((f: any) => enteroDe(f?.id)).filter((n: number | null): n is number => n !== null);
+    if (!ids.length) return null;
+    cacheClaseVenta = { ids, expira: Date.now() + TTL_CATALOGO_CLASE_VENTA };
+    return ids;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Validación previa del puesto de venta. Devuelve el mensaje (422) o null.
+ * Con `exigirCreacion` se exigen los tres campos obligatorios; sin ella solo se
+ * revisa lo que llega. Si el catálogo no responde no se bloquea idClaseVenta.
+ */
+async function validarPuestoVenta(
+  authToken: string | string[],
+  datos: Record<string, any>,
+  exigirCreacion: boolean
+): Promise<string | null> {
+  if (datos.idVentero !== undefined) {
+    if (enteroDe(datos.idVentero) === null) return 'El campo idVentero debe ser un entero';
+  } else if (exigirCreacion) {
+    return 'El campo idVentero es obligatorio';
+  }
+  if (datos.idClaseVenta === undefined) {
+    if (exigirCreacion) return 'El campo idClaseVenta es obligatorio';
+  } else {
+    const idClase = enteroDe(datos.idClaseVenta);
+    if (idClase === null) return 'El campo idClaseVenta debe ser un entero';
+    const catalogo = await idsClaseVenta(authToken);
+    if (catalogo && !catalogo.includes(idClase)) {
+      return 'El campo idClaseVenta no existe en el catálogo de clase de venta';
+    }
+  }
+  if (exigirCreacion && (typeof datos.desActividadEconomica !== 'string' || !datos.desActividadEconomica.trim())) {
+    return 'El campo desActividadEconomica no puede estar vacío';
+  }
+  return null;
+}
+
+/** Respuesta 422 para datos inválidos del puesto de venta. */
+function datosInvalidos(res: Response, message: string) {
+  return res.status(422).json({ success: false, codigo: 'DATOS_INVALIDOS', message });
+}
+
+/**
+ * Traduce los errores de escritura del puesto de venta. Un 403 se explica con
+ * el módulo que falta. Un 409 genérico ("viola una regla de negocio") casi
+ * siempre es el idClaseVenta (llave foránea o NOT NULL), así que se nombra.
+ * El resto se propaga como siempre.
+ */
+function responderErrorPuestoVenta(error: any, res: Response, route: string, enviado: Record<string, any>) {
+  const estado = error?.response?.status;
+  if (estado === 403) {
+    return res.status(403).json({
+      success: false,
+      codigo: 'SIN_PERMISO',
+      message: 'Sin permiso para escribir el puesto de venta (módulo registro de ventero)'
+    });
+  }
+  if (estado === 409 && Object.prototype.hasOwnProperty.call(enviado, 'idClaseVenta')) {
+    const detalle = detalleSisdep(error.response?.data);
+    if (!detalle || /regla de negocio/i.test(detalle)) {
+      return datosInvalidos(res, 'El campo idClaseVenta no es válido para el catálogo de clase de venta');
+    }
+  }
+  return handleProxyError(error, res, route);
+}
+
+// POST idempotente: si el ventero ya tiene puesto se actualiza; si no, se crea.
 app.post('/ventero/datosVenta', asyncHandler(async (req: Request, res: Response) => {
   const authToken = requireToken(req, res);
   if (!authToken) return;
-  const { id, ...datos } = req.body ?? {};
+  // El id lo asigna SISDEP: el que envíe el cliente se descarta.
+  const { id: _ignorado, ...cambios } = req.body ?? {};
+  const idVentero = enteroDe(cambios.idVentero);
+
+  // ¿El ventero ya tiene puesto? Se busca por idVentero para no chocar con el UNIQUE.
+  let actual: Record<string, any> | null = null;
+  if (idVentero !== null) {
+    try {
+      const r = await axios.get(`${sisdepBaseUrl}/api/ventero/datosVenta`, buildAxiosConfig(authToken, { idVentero }));
+      actual = entidades(r.data, 'datosVenta')[0] ?? null;
+    } catch {
+      // Fail-open: si no se puede leer, se intenta crear como antes.
+    }
+  }
+
+  const idActual = actual ? enteroDe(actual.id) : null;
+  if (actual && idActual !== null) {
+    const datos = fusionarPuesto(actual, cambios, idActual);
+    const invalido = await validarPuestoVenta(authToken, datos, false);
+    if (invalido) return datosInvalidos(res, invalido);
+    try {
+      const upstream = await axios.patch(
+        `${sisdepBaseUrl}/api/ventero/datosVenta/${idActual}`,
+        datos,
+        buildAxiosConfig(authToken)
+      );
+      return res.status(upstream.status).json(upstream.data);
+    } catch (error: any) {
+      return responderErrorPuestoVenta(error, res, 'PATCH /api/ventero/datosVenta/:id', datos);
+    }
+  }
+
+  const datos: Record<string, any> = { ...cambios };
+  if (idVentero !== null) datos.idVentero = idVentero;
+  const invalido = await validarPuestoVenta(authToken, datos, true);
+  if (invalido) return datosInvalidos(res, invalido);
   try {
     const upstream = await axios.post(
       `${sisdepBaseUrl}/api/ventero/datosVenta`,
@@ -1478,7 +1651,7 @@ app.post('/ventero/datosVenta', asyncHandler(async (req: Request, res: Response)
     );
     res.status(upstream.status).json(upstream.data);
   } catch (error: any) {
-    handleProxyError(error, res, 'POST /api/ventero/datosVenta');
+    responderErrorPuestoVenta(error, res, 'POST /api/ventero/datosVenta', datos);
   }
 }));
 
@@ -1487,15 +1660,29 @@ app.patch('/ventero/datosVenta/:id', asyncHandler(async (req: Request, res: Resp
   if (!authToken) return;
   const id = requireNumericId(req, res);
   if (!id) return;
+  const idNumero = Number(id);
+  const cambios: Record<string, any> = { ...(req.body ?? {}) };
+  // Se lee el puesto actual para enviar el registro completo: SISDEP exige el id
+  // en el cuerpo y no debe perder los campos que no llegan en el PATCH.
+  let actual: Record<string, any> | null = null;
+  try {
+    const r = await axios.get(`${sisdepBaseUrl}/api/ventero/datosVenta/${id}`, buildAxiosConfig(authToken));
+    actual = unPuesto(r.data);
+  } catch {
+    // Fail-open: sin lectura se reenvía solo lo que mandó el cliente.
+  }
+  const datos = fusionarPuesto(actual, cambios, idNumero);
+  const invalido = await validarPuestoVenta(authToken, datos, false);
+  if (invalido) return datosInvalidos(res, invalido);
   try {
     const upstream = await axios.patch(
       `${sisdepBaseUrl}/api/ventero/datosVenta/${id}`,
-      req.body,
+      datos,
       buildAxiosConfig(authToken)
     );
     res.status(upstream.status).json(upstream.data);
   } catch (error: any) {
-    handleProxyError(error, res, 'PATCH /api/ventero/datosVenta/:id');
+    responderErrorPuestoVenta(error, res, 'PATCH /api/ventero/datosVenta/:id', datos);
   }
 }));
 
@@ -1562,6 +1749,10 @@ app.post('/operativa/sensibilizacion', asyncHandler(async (req: Request, res: Re
   const authToken = requireToken(req, res);
   if (!authToken) return;
   const { userId } = reclamosDelToken(authToken);
+  const descartadas = clavesDescartadas(req.body, CAMPOS_SENSIBILIZACION);
+  if (descartadas.length) {
+    console.warn(`POST /operativa/sensibilizacion: claves descartadas del cuerpo: ${descartadas.join(', ')}`);
+  }
   const datos: Record<string, any> = { completo: false, ...soloCampos(req.body, CAMPOS_SENSIBILIZACION), idUsuario: userId };
   if (typeof datos.numeroSerie === 'string') datos.numeroSerie = datos.numeroSerie.trim();
   // Si no llega la geometría, se deriva en WKT a partir de lat/long (longitud primero).
@@ -1598,6 +1789,11 @@ app.patch('/operativa/sensibilizacion/:id', asyncHandler(async (req: Request, re
     const actual = entidades(actualResp.data, 'sensibilizacion')[0];
     if (!actual) return res.status(404).json({ success: false, message: 'Sensibilización no encontrada' });
 
+    // `motivo` no se pierde: se reenvía como motivo_cambio, por eso no se avisa.
+    const descartadas = clavesDescartadas(req.body, CAMPOS_SENSIBILIZACION, ['motivo']);
+    if (descartadas.length) {
+      console.warn(`PATCH /operativa/sensibilizacion/:id: claves descartadas del cuerpo: ${descartadas.join(', ')}`);
+    }
     const cambios = soloCampos(req.body, CAMPOS_SENSIBILIZACION);
     const base = soloCampos(actual, CAMPOS_SENSIBILIZACION);
     // La ubicación vuelve de SISDEP como objeto; se reenvía en WKT a partir de lat/long.
