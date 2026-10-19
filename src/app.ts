@@ -1551,11 +1551,12 @@ async function idsClaseVenta(authToken: string | string[]): Promise<number[] | n
 async function validarPuestoVenta(
   authToken: string | string[],
   datos: Record<string, any>,
-  exigirCreacion: boolean
+  exigirCreacion: boolean,
+  exigirVentero = true
 ): Promise<string | null> {
-  if (datos.idVentero !== undefined) {
+  if (datos.idVentero !== undefined && datos.idVentero !== null) {
     if (enteroDe(datos.idVentero) === null) return 'El campo idVentero debe ser un entero';
-  } else if (exigirCreacion) {
+  } else if (exigirCreacion && exigirVentero) {
     return 'El campo idVentero es obligatorio';
   }
   if (datos.idClaseVenta === undefined) {
@@ -1601,6 +1602,114 @@ function responderErrorPuestoVenta(error: any, res: Response, route: string, env
     }
   }
   return handleProxyError(error, res, route);
+}
+
+/**
+ * Puesto de venta de una sensibilización (objeto `datosVenta` anidado en el POST o
+ * el PATCH de la sensibilización). Devuelve el puesto guardado, o null si ya
+ * respondió con error.
+ *
+ * - Con vendedor (idVentero): el puesto del ventero, creado o actualizado (upsert).
+ *   Si el ventero no tiene puesto y la sensibilización traía uno sin titular (NN),
+ *   ese puesto pasa a ser del ventero.
+ * - NN (idVentero null): un puesto SIN ventero (V20261019.1 en SISDEP). Si la
+ *   sensibilización ya tenía su puesto sin titular, se actualiza; si no, se crea.
+ *
+ * Así una NN guarda dirección, clase de venta y actividad (antes se perdían).
+ */
+async function guardarPuestoDeSensibilizacion(
+  authToken: string | string[],
+  res: Response,
+  pedido: Record<string, any>,
+  idVentero: number | null,
+  idPuestoActual: number | null,
+  idSectorInterno: number | null = null
+): Promise<{ puesto: Record<string, any>; creado: boolean } | null> {
+  // El id y el titular los decide SIVEP, no el cliente.
+  const { id: _id, idVentero: _titular, ...cambios } = pedido ?? {};
+  let actual: Record<string, any> | null = null;
+  if (idVentero !== null) {
+    try {
+      const r = await axios.get(`${sisdepBaseUrl}/api/ventero/datosVenta`, buildAxiosConfig(authToken, { idVentero }));
+      actual = entidades(r.data, 'datosVenta')[0] ?? null;
+    } catch {
+      actual = null;
+    }
+  }
+  if (!actual && idPuestoActual !== null) {
+    try {
+      const r = await axios.get(`${sisdepBaseUrl}/api/ventero/datosVenta/${idPuestoActual}`, buildAxiosConfig(authToken));
+      const previo = unPuesto(r.data);
+      // Solo se reutiliza un puesto sin titular (el de la NN).
+      if (previo && (previo.idVentero === null || previo.idVentero === undefined)) actual = previo;
+    } catch {
+      actual = null;
+    }
+  }
+
+  const idActual = actual ? enteroDe(actual.id) : null;
+
+  // Cada puesto tiene su propia dirección (datos_venta.id_direccion es UNIQUE). SISDEP
+  // solo devuelve un 409 genérico, así que se verifica antes para decir el motivo real.
+  const idDireccion = enteroDe(cambios.idDireccion);
+  if (idDireccion !== null) {
+    try {
+      const r = await axios.get(`${sisdepBaseUrl}/api/ventero/datosVenta`, buildAxiosConfig(authToken, { idDireccion }));
+      const otro = entidades(r.data, 'datosVenta').find((d: any) => enteroDe(d?.id) !== idActual);
+      if (otro) {
+        datosInvalidos(res, `La dirección ${idDireccion} ya pertenece a otro puesto de venta: cree una dirección nueva`
+          + ' para este puesto (POST /general/direccion).');
+        return null;
+      }
+    } catch {
+      // Si no se puede verificar, decide SISDEP.
+    }
+  }
+
+  if (actual && idActual !== null) {
+    const datos = fusionarPuesto(actual, cambios, idActual);
+    if (idVentero !== null) datos.idVentero = idVentero;
+    else delete datos.idVentero;
+    const invalido = await validarPuestoVenta(authToken, datos, false, false);
+    if (invalido) {
+      datosInvalidos(res, invalido);
+      return null;
+    }
+    try {
+      const r = await axios.patch(`${sisdepBaseUrl}/api/ventero/datosVenta/${idActual}`, datos, buildAxiosConfig(authToken));
+      return { puesto: unPuesto(r.data) ?? datos, creado: false };
+    } catch (error: any) {
+      responderErrorPuestoVenta(error, res, 'PATCH /api/ventero/datosVenta/:id', datos);
+      return null;
+    }
+  }
+
+  const datos: Record<string, any> = { ...cambios };
+  if (idVentero !== null) datos.idVentero = idVentero;
+  // Igual que el formulario de SISDEP: el puesto nuevo toma el territorio de la sensibilización.
+  if (datos.idSectorInterno === undefined && idSectorInterno !== null) datos.idSectorInterno = idSectorInterno;
+  const invalido = await validarPuestoVenta(authToken, datos, true, false);
+  if (invalido) {
+    datosInvalidos(res, invalido);
+    return null;
+  }
+  try {
+    const r = await axios.post(`${sisdepBaseUrl}/api/ventero/datosVenta`, datos, buildAxiosConfig(authToken));
+    return { puesto: unPuesto(r.data) ?? datos, creado: true };
+  } catch (error: any) {
+    responderErrorPuestoVenta(error, res, 'POST /api/ventero/datosVenta', datos);
+    return null;
+  }
+}
+
+/** Borra un puesto recién creado cuando la sensibilización no se pudo guardar (mejor esfuerzo). */
+async function deshacerPuesto(authToken: string | string[], idPuesto: number | null) {
+  if (idPuesto === null) return;
+  try {
+    await axios.delete(`${sisdepBaseUrl}/api/ventero/datosVenta/${idPuesto}`, buildAxiosConfig(authToken));
+  } catch {
+    console.warn(`No se pudo deshacer el puesto de venta ${idPuesto} tras un error al guardar la sensibilización`);
+  }
 }
 
 // POST idempotente: si el ventero ya tiene puesto se actualiza; si no, se crea.
@@ -1749,10 +1858,13 @@ app.post('/operativa/sensibilizacion', asyncHandler(async (req: Request, res: Re
   const authToken = requireToken(req, res);
   if (!authToken) return;
   const { userId } = reclamosDelToken(authToken);
-  const descartadas = clavesDescartadas(req.body, CAMPOS_SENSIBILIZACION);
+  // `datosVenta` (puesto de venta) se guarda aparte; esNn y territorio los calcula SISDEP.
+  const descartadas = clavesDescartadas(req.body, CAMPOS_SENSIBILIZACION, ['datosVenta', 'esNn', 'territorio']);
   if (descartadas.length) {
     console.warn(`POST /operativa/sensibilizacion: claves descartadas del cuerpo: ${descartadas.join(', ')}`);
   }
+  const puestoPedido = req.body?.datosVenta && typeof req.body.datosVenta === 'object' && !Array.isArray(req.body.datosVenta)
+    ? req.body.datosVenta : null;
   const datos: Record<string, any> = { completo: false, ...soloCampos(req.body, CAMPOS_SENSIBILIZACION), idUsuario: userId };
   if (typeof datos.numeroSerie === 'string') datos.numeroSerie = datos.numeroSerie.trim();
   // Si no llega la geometría, se deriva en WKT a partir de lat/long (longitud primero).
@@ -1767,9 +1879,29 @@ app.post('/operativa/sensibilizacion', asyncHandler(async (req: Request, res: Re
     if (await numeroSerieOcupado(authToken, datos.numeroSerie)) {
       return res.status(409).json({ success: false, codigo: 'NUMERO_SERIE_REPETIDO', message: `El número de serie ${datos.numeroSerie} ya está registrado` });
     }
-    const r = await axios.post(`${sisdepBaseUrl}/api/operativa/sensibilizacion`, datos, buildAxiosConfig(authToken));
+    let puesto: { puesto: Record<string, any>; creado: boolean } | null = null;
+    if (puestoPedido) {
+      const idVentero = enteroDe(datos.idPersona);
+      puesto = await guardarPuestoDeSensibilizacion(authToken, res, puestoPedido, idVentero, null,
+        enteroDe(datos.idSectorInterno));
+      if (!puesto) return;
+      // En NN el enlace lo manda SIVEP; con vendedor SISDEP lo deriva del ventero.
+      if (idVentero === null) datos.idDatosVenta = enteroDe(puesto.puesto.id);
+    }
+    let r;
+    try {
+      r = await axios.post(`${sisdepBaseUrl}/api/operativa/sensibilizacion`, datos, buildAxiosConfig(authToken));
+    } catch (error: any) {
+      if (puesto?.creado && enteroDe(datos.idPersona) === null) await deshacerPuesto(authToken, enteroDe(puesto.puesto.id));
+      throw error;
+    }
     const creada = entidades(r.data, 'sensibilizacion')[0] ?? r.data;
-    res.status(201).json({ success: true, sensibilizacion: creada });
+    res.status(201).json({
+      success: true,
+      sensibilizacion: creada,
+      ...(puesto ? { datosVenta: puesto.puesto } : {}),
+      ...(descartadas.length ? { camposDescartados: descartadas } : {})
+    });
   } catch (error: any) {
     handleProxyError(error, res, 'POST /api/operativa/sensibilizacion');
   }
@@ -1790,7 +1922,7 @@ app.patch('/operativa/sensibilizacion/:id', asyncHandler(async (req: Request, re
     if (!actual) return res.status(404).json({ success: false, message: 'Sensibilización no encontrada' });
 
     // `motivo` no se pierde: se reenvía como motivo_cambio, por eso no se avisa.
-    const descartadas = clavesDescartadas(req.body, CAMPOS_SENSIBILIZACION, ['motivo']);
+    const descartadas = clavesDescartadas(req.body, CAMPOS_SENSIBILIZACION, ['motivo', 'datosVenta', 'esNn', 'territorio']);
     if (descartadas.length) {
       console.warn(`PATCH /operativa/sensibilizacion/:id: claves descartadas del cuerpo: ${descartadas.join(', ')}`);
     }
@@ -1813,6 +1945,16 @@ app.patch('/operativa/sensibilizacion/:id', asyncHandler(async (req: Request, re
         && await numeroSerieOcupado(authToken, datos.numeroSerie, Number(id))) {
       return res.status(409).json({ success: false, codigo: 'NUMERO_SERIE_REPETIDO', message: `El número de serie ${datos.numeroSerie} ya está registrado` });
     }
+    const puestoPedido = req.body?.datosVenta && typeof req.body.datosVenta === 'object' && !Array.isArray(req.body.datosVenta)
+      ? req.body.datosVenta : null;
+    let puesto: { puesto: Record<string, any>; creado: boolean } | null = null;
+    if (puestoPedido) {
+      const idVentero = enteroDe(datos.idPersona);
+      puesto = await guardarPuestoDeSensibilizacion(authToken, res, puestoPedido, idVentero, enteroDe(actual.idDatosVenta),
+        enteroDe(datos.idSectorInterno));
+      if (!puesto) return;
+      if (idVentero === null) datos.idDatosVenta = enteroDe(puesto.puesto.id);
+    }
     const motivo = typeof req.body?.motivo === 'string' ? req.body.motivo : undefined;
     const r = await axios.patch(
       `${sisdepBaseUrl}/api/operativa/sensibilizacion/${id}`,
@@ -1820,7 +1962,12 @@ app.patch('/operativa/sensibilizacion/:id', asyncHandler(async (req: Request, re
       buildAxiosConfig(authToken)
     );
     const editada = entidades(r.data, 'sensibilizacion')[0] ?? r.data;
-    res.json({ success: true, sensibilizacion: editada });
+    res.json({
+      success: true,
+      sensibilizacion: editada,
+      ...(puesto ? { datosVenta: puesto.puesto } : {}),
+      ...(descartadas.length ? { camposDescartados: descartadas } : {})
+    });
   } catch (error: any) {
     handleProxyError(error, res, 'PATCH /api/operativa/sensibilizacion/:id');
   }
