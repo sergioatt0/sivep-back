@@ -4,6 +4,17 @@ parameters:
 - name: tag
   displayName: Image Tag
   type: string
+- name: ejecutadoPor
+  displayName: Ejecutado por
+  type: string
+  default: ''
+
+resources:
+  repositories:
+  - repository: templates
+    type: git
+    name: sisdep/templates
+    ref: refs/heads/main
 
 variables:
 
@@ -48,6 +59,15 @@ stages:
 
                 echo "===> Updating docker-stack.yml"
                 TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sivep-uat/docker-stack.yml
+
+  - template: bitacora.yml@templates
+    parameters:
+      proyecto: SISDEP TERRITORIO - BACK
+      ambiente: UAT
+      tag: ${{ parameters.tag }}
+      leerTagger: true
+      ejecutadoPor: ${{ parameters.ejecutadoPor }}
+      dependsOn: DeployUat
 
   - job: Notify_UAT
     displayName: Notify UAT
@@ -102,6 +122,15 @@ stages:
                 echo "===> Updating docker-stack.yml"
                 TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sivep-qa/docker-stack.yml
 
+  - template: bitacora.yml@templates
+    parameters:
+      proyecto: SISDEP TERRITORIO - BACK
+      ambiente: QA
+      tag: ${{ parameters.tag }}
+      leerTagger: true
+      ejecutadoPor: ${{ parameters.ejecutadoPor }}
+      dependsOn: DeployQA
+
   - job: Notify_QA
     displayName: Notify QA
 
@@ -154,6 +183,15 @@ stages:
 
                 echo "===> Updating docker-stack.yml"
                 TAG=${{ parameters.tag }} yq -i '.services.back.image |= sub(":[^:]+$", ":" + strenv(TAG))' /srv/app/sivep/docker-stack.yml
+
+  - template: bitacora.yml@templates
+    parameters:
+      proyecto: SISDEP TERRITORIO - BACK
+      ambiente: PRODUCTION
+      tag: ${{ parameters.tag }}
+      leerTagger: true
+      ejecutadoPor: ${{ parameters.ejecutadoPor }}
+      dependsOn: DeployPreprod
 
   - job: Notify_PRODUCTION
     displayName: Notify PRODUCTION

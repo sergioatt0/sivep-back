@@ -121,7 +121,8 @@ stages:
               }
             },
             "templateParameters": {
-              "tag": "$(TAG)"
+              "tag": "$(TAG)",
+              "ejecutadoPor": "$(Build.RequestedFor)"
             }
           }'
 
