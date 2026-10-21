@@ -60,6 +60,8 @@ Una vez corriendo, `GET http://localhost:5001/` devuelve la lista de endpoints:
 | POST   | `/login`                            | No                | Autentica contra SISDEP. Body: `{ username, password }`. |
 | GET    | `/ventero-completo/:id`             | **Sí**            | Datos combinados de ventero + persona.                    |
 | GET    | `/api/proxy-image?url=...`          | **Sí**            | Proxy de imágenes del dominio `medellin.gov.co`.          |
+| GET/POST/PATCH/DELETE | `/operativa/reconocimientoIncautacion[/:id]` | **Sí** | CRUD de reconocimientos de incautación (lista, `/paginated`, detalle, alta, edición, borrado). Ver `docs-md/incautaciones-endpoint.md`. |
+| GET/POST/PATCH/DELETE | `/operativa/actaInventario[/:id]`   | **Sí**            | Acta de inventario: lista, `/paginated`, `/stream`, detalle, alta y edición multipart (`info` + archivo). Ver `docs-md/incautaciones-endpoint.md`. |
 
 ### Smoke test
 
