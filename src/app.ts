@@ -215,6 +215,16 @@ app.get('/', (req: Request, res: Response) => {
         description: "Bitácora de cambios de la sensibilización."
       },
       {
+        method: "GET|POST|PATCH|DELETE",
+        path: "/operativa/reconocimientoIncautacion[/:id]",
+        description: "CRUD de reconocimientos de incautación: lista (también /paginated) y detalle por /:id; alta, edición y borrado. Datos: elementos incautados, señales de reconocimiento, usuario de la diligencia e id de persona."
+      },
+      {
+        method: "POST|PATCH|DELETE",
+        path: "/operativa/actaInventario[/:id]",
+        description: "Acta de inventario: serial único, PDF (pdfActa), esNn, dirección de incautación, funcionario que acompaña y enlace al reconocimiento por idReconocimientoIncautacion. Lista en /paginated y /stream; alta y edición multipart (parte 'info' + archivo)."
+      },
+      {
         method: "GET",
         path: "/operativa/sectorInterno",
         description: "Territorios."
@@ -2045,6 +2055,257 @@ app.post('/operativa/sensibilizacion/:id/formal', crearFicha('formal'));
 app.post('/operativa/sensibilizacion/:id/informal', crearFicha('informal'));
 app.patch('/operativa/sensibilizacion/:id/formal', editarFicha('formal'));
 app.patch('/operativa/sensibilizacion/:id/informal', editarFicha('informal'));
+
+// ============================================================
+// Operativa — Incautaciones (reconocimiento + acta de inventario)
+// Proxy passthrough a SISDEP. Las respuestas se conservan tal cual.
+// ============================================================
+
+// IMPORTANTE: /paginated y /stream deben registrarse antes que /:id para que
+// Express no capture "paginated" o "stream" como id dinámico.
+
+// --- Reconocimiento de incautación ---
+
+app.get('/operativa/reconocimientoIncautacion/paginated', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/operativa/reconocimientoIncautacion/paginated`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/operativa/reconocimientoIncautacion/paginated');
+  }
+}));
+
+app.get('/operativa/reconocimientoIncautacion', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/operativa/reconocimientoIncautacion`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/operativa/reconocimientoIncautacion');
+  }
+}));
+
+app.get('/operativa/reconocimientoIncautacion/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/operativa/reconocimientoIncautacion/${id}`,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/operativa/reconocimientoIncautacion/:id');
+  }
+}));
+
+app.post('/operativa/reconocimientoIncautacion', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.post(
+      `${sisdepBaseUrl}/api/operativa/reconocimientoIncautacion`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'POST /api/operativa/reconocimientoIncautacion');
+  }
+}));
+
+app.patch('/operativa/reconocimientoIncautacion/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.patch(
+      `${sisdepBaseUrl}/api/operativa/reconocimientoIncautacion/${id}`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'PATCH /api/operativa/reconocimientoIncautacion/:id');
+  }
+}));
+
+app.delete('/operativa/reconocimientoIncautacion/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.delete(
+      `${sisdepBaseUrl}/api/operativa/reconocimientoIncautacion/${id}`,
+      buildAxiosConfig(authToken)
+    );
+    // Axios convierte un cuerpo vacío en "", no en null.
+    res.status(upstream.status).json(upstream.data || { success: true });
+  } catch (error: any) {
+    handleProxyError(error, res, 'DELETE /api/operativa/reconocimientoIncautacion/:id');
+  }
+}));
+
+// --- Acta de inventario ---
+
+app.get('/operativa/actaInventario/paginated', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/operativa/actaInventario/paginated`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/operativa/actaInventario/paginated');
+  }
+}));
+
+app.get('/operativa/actaInventario/stream', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/operativa/actaInventario/stream`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/operativa/actaInventario/stream');
+  }
+}));
+
+app.get('/operativa/actaInventario', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/operativa/actaInventario`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/operativa/actaInventario');
+  }
+}));
+
+app.get('/operativa/actaInventario/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/operativa/actaInventario/${id}`,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/operativa/actaInventario/:id');
+  }
+}));
+
+// POST: passthrough del stream multipart (parte "info" en JSON + PDF opcional).
+// NO usar express.json — el body llega como stream binario multipart/form-data.
+app.post('/operativa/actaInventario', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+
+  const contentType = req.headers['content-type'];
+  if (!contentType || !contentType.startsWith('multipart/form-data')) {
+    return res.status(400).json({
+      success: false,
+      message: 'Content-Type debe ser multipart/form-data'
+    });
+  }
+
+  try {
+    const upstream = await axios.post(
+      `${sisdepBaseUrl}/api/operativa/actaInventario`,
+      req,
+      {
+        headers: {
+          'x-access': Array.isArray(authToken) ? authToken[0] : authToken,
+          'content-type': contentType,
+          ...(req.headers['content-length'] ? { 'content-length': req.headers['content-length'] } : {})
+        },
+        maxBodyLength: 50 * 1024 * 1024,
+        maxContentLength: 50 * 1024 * 1024,
+        timeout: 60000
+      }
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'POST /api/operativa/actaInventario');
+  }
+}));
+
+// PATCH: mismo passthrough multipart; SISDEP reemplaza el PDF si viene archivo.
+app.patch('/operativa/actaInventario/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+
+  const contentType = req.headers['content-type'];
+  if (!contentType || !contentType.startsWith('multipart/form-data')) {
+    return res.status(400).json({
+      success: false,
+      message: 'Content-Type debe ser multipart/form-data'
+    });
+  }
+
+  try {
+    const upstream = await axios.patch(
+      `${sisdepBaseUrl}/api/operativa/actaInventario/${id}`,
+      req,
+      {
+        headers: {
+          'x-access': Array.isArray(authToken) ? authToken[0] : authToken,
+          'content-type': contentType,
+          ...(req.headers['content-length'] ? { 'content-length': req.headers['content-length'] } : {})
+        },
+        maxBodyLength: 50 * 1024 * 1024,
+        maxContentLength: 50 * 1024 * 1024,
+        timeout: 60000
+      }
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'PATCH /api/operativa/actaInventario/:id');
+  }
+}));
+
+app.delete('/operativa/actaInventario/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.delete(
+      `${sisdepBaseUrl}/api/operativa/actaInventario/${id}`,
+      buildAxiosConfig(authToken)
+    );
+    // Axios convierte un cuerpo vacío en "", no en null.
+    res.status(upstream.status).json(upstream.data || { success: true });
+  } catch (error: any) {
+    handleProxyError(error, res, 'DELETE /api/operativa/actaInventario/:id');
+  }
+}));
 
 // --- Archivos (fotos y firmas): listar por módulo y ver la ficha de un archivo ---
 app.get('/archivos', asyncHandler(async (req: Request, res: Response) => {
