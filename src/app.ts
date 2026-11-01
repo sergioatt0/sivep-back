@@ -1397,26 +1397,45 @@ function entidades(data: any, nombre: string): any[] {
   return m && typeof m === 'object' ? Object.values(m) : [];
 }
 
-/** Claims del token de SISDEP (userId, groupId). Sin verificar firma: SISDEP la verifica en cada llamada. */
-function reclamosDelToken(token: string | string[]): { userId?: number; groupId?: number } {
+/**
+ * Claims del token de SISDEP (userId, groupId y, desde los varios grupos, groupIds). Sin
+ * verificar firma: SISDEP la verifica en cada llamada.
+ */
+function reclamosDelToken(token: string | string[]): { userId?: number; groupId?: number; groupIds?: number[] } {
   try {
     const t = Array.isArray(token) ? token[0] : token;
     const payload = JSON.parse(Buffer.from(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
-    return { userId: payload.userId, groupId: payload.groupId };
+    return {
+      userId: payload.userId,
+      groupId: payload.groupId,
+      groupIds: Array.isArray(payload.groupIds) ? payload.groupIds : undefined
+    };
   } catch {
     return {};
   }
 }
 
 /**
- * ¿El grupo del usuario puede escribir en el módulo? Misma regla de SISDEP: el
- * grupo 0 siempre puede; los demás según permisos_x_modulo_x_grupo. La consulta
- * va con el token del usuario, así que un token inválido falla aquí con 401.
+ * ¿El usuario puede escribir en el módulo? Misma regla de SISDEP: un usuario puede tener varios
+ * grupos y sus permisos son la suma de los de todos; el grupo 0 siempre puede.
+ *
+ * Se pregunta a SISDEP por los permisos ya sumados (GET /api/seguridad/usuario/ego/permisos),
+ * que además usa los grupos vigentes del usuario y no los del momento del login. Si ese SISDEP
+ * todavía no tiene el endpoint (404), se usa la consulta anterior por el grupo principal. La
+ * consulta va con el token del usuario, así que un token inválido falla aquí con 401.
  */
 async function puedeEscribir(token: string | string[], idModulo: number): Promise<boolean | 'sin_sesion'> {
-  const { groupId } = reclamosDelToken(token);
-  if (groupId === 0) return true;
+  const { groupId, groupIds } = reclamosDelToken(token);
+  if (groupId === 0 || (groupIds || []).includes(0)) return true;
   if (typeof groupId !== 'number') return 'sin_sesion';
+  try {
+    const r = await axios.get(`${sisdepBaseUrl}/api/seguridad/usuario/ego/permisos`, buildAxiosConfig(token));
+    if (r.data?.esAdministrador === true) return true;
+    return Object.values(r.data?.permisos || {})
+      .some((p: any) => p?.idModuloSistema === idModulo && p?.escribir === true);
+  } catch (e: any) {
+    if (e?.response?.status !== 404) throw e;
+  }
   const r = await axios.get(
     `${sisdepBaseUrl}/api/seguridad/permisoModuloGrupo`,
     buildAxiosConfig(token, { idGrupo: groupId, idModuloSistema: idModulo })
