@@ -29,6 +29,8 @@
     "typescript": "^7.0.2"
   },
   "overrides": {
-    "qs": "6.16.0"
+    "qs": "6.16.2",
+    "follow-redirects": "1.16.2",
+    "body-parser": "2.4.0"
   }
 }
