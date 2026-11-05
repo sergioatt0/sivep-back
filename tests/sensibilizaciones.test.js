@@ -20,16 +20,23 @@ function startSisdepMock() {
   return new Promise((resolve) => {
     let sensis;
     let formales;
+    let informales;
     let siguienteId;
     const reset = () => {
       sensis = {
         100: { id: 100, numeroSerie: 'A-100', idTipo: 1, fecha: '2026-10-01T09:00:00', idUsuario: 7, idPersona: null,
           esNn: true, idSectorInterno: 3, latitud: 6.25, longitud: -75.56, localizacion: { type: 'Point', coordinates: [-75.56, 6.25] },
-          completo: false, esPqrsd: false, retiraElementosEspacioPublico: true, observaciones: 'inicial', territorio: 'viejo' }
+          completo: false, esPqrsd: false, retiraElementosEspacioPublico: true, observaciones: 'inicial', territorio: 'viejo',
+          // Bloque del acta v10 tal como lo devuelve SISDEP en /venta y en el detalle.
+          elementosEspacioPublico: [
+            { id: 1, codigo: 'venta_informal', cuentaAutorizacion: true, numeroResolucion: null, cumpleCantidad: null, cual: null, idSitioProhibido: null },
+            { id: 2, codigo: 'avisos', cuentaAutorizacion: false, numeroResolucion: '2025-123', cumpleCantidad: false, cual: 'Pendón', idSitioProhibido: 4 }
+          ] }
       };
       formales = { 9: { id: 9, idSensibilizacion: 100, nombreEstablecimiento: 'Tienda', cumpleActividadEconomica: true,
         autoAvisosPublicitarios: false, cantiAvisosPublicitarios: false, autoMesasSillas: false, cantiMesasSillas: false,
         autoJuegosMecanicos: false, cantiJuegosMecanicos: false, autoBazares: false, cantiBazares: false, realizaActividadProhibida: false } };
+      informales = {};
       siguienteId = 200;
     };
     reset();
@@ -73,10 +80,16 @@ function startSisdepMock() {
         }
         m = p.match(/^\/api\/operativa\/(sensibilizacionFormales|sensibilizacionInformales)(?:\/(\d+))?$/);
         if (m) {
-          const tabla = m[1] === 'sensibilizacionFormales' ? formales : {};
+          const tabla = m[1] === 'sensibilizacionFormales' ? formales : informales;
           if (req.method === 'GET') return ok(200, ent(m[1], Object.values(tabla).filter((f) => String(f.idSensibilizacion) === q.idSensibilizacion)));
-          if (req.method === 'POST') { const f = { ...body, id: siguienteId++ }; return ok(201, ent(m[1], [f])); }
+          if (req.method === 'POST') { const f = { ...body, id: siguienteId++ }; tabla[f.id] = f; return ok(201, ent(m[1], [f])); }
           if (req.method === 'PATCH') { Object.assign(tabla[m[2]], body); return ok(200, ent(m[1], [tabla[m[2]]])); }
+        }
+        if (p === '/api/dominios/actividadProhibida') {
+          return ok(200, ent('actividadProhibida', [
+            { id: 3, descripcion: 'Venta de sustancias psicoactivas', activo: false },
+            { id: 14, descripcion: 'Utiliza balizas, materas de cemento, canecas de cemento', activo: true }
+          ]));
         }
         if (p === '/api/historial/sensibilizacion/100') return ok(200, [{ campo: 'observaciones' }]);
         if (p === '/api/dominios/tipoSensibilizacion') return ok(200, ent('tipoSensibilizacion', [{ id: 1, descripcion: 'General' }]));
@@ -309,6 +322,98 @@ describe('Sensibilizaciones (proxy a SISDEP)', () => {
     test('editar una ficha que no existe: 404', async () => {
       const { status } = await httpRequest(port, 'PATCH', '/operativa/sensibilizacion/100/informal', { 'x-access': CON_PERMISO }, { cumpleClaseVenta: true });
       assert.equal(status, 404);
+    });
+  });
+
+  describe('Acta FO-GGOL-018 v10', () => {
+    const cierre = {
+      balizasTipo: 'anclados',
+      otraActividadProhibida: 'Cerramiento con malla',
+      correoNotificacion: 'acta@medellin.gov.co',
+      cargoQuienLlena: 'Técnico operativo',
+      nombreTestigo: 'Ana Pérez',
+      documentoTestigo: '0012345678'
+    };
+    const elementos = [
+      { codigo: 'venta_informal', cuentaAutorizacion: true, numeroResolucion: null, cumpleCantidad: null, cual: null, idSitioProhibido: null },
+      { codigo: 'avisos', cuentaAutorizacion: false, numeroResolucion: '2025-123', cumpleCantidad: false, cual: 'Pendón', idSitioProhibido: 4 }
+    ];
+    const nueva = { numeroSerie: 'V10-1', idTipo: 1, fecha: '2026-11-04T10:00:00', idSectorInterno: 3 };
+
+    test('POST: reenvía el cierre del acta y el bloque de elementos', async () => {
+      const { status, body } = await httpRequest(port, 'POST', '/operativa/sensibilizacion', { 'x-access': CON_PERMISO },
+        { ...nueva, ...cierre, elementosEspacioPublico: elementos });
+      assert.equal(status, 201);
+      const enviado = llamadas('POST', '/api/operativa/sensibilizacion')[0].body;
+      for (const [campo, valor] of Object.entries(cierre)) assert.equal(enviado[campo], valor, campo);
+      assert.deepEqual(enviado.elementosEspacioPublico, elementos);
+      assert.equal(body.camposDescartados, undefined, 'los campos del acta no se descartan');
+    });
+
+    test('POST: una lista vacía se reenvía tal cual (borra las filas)', async () => {
+      await httpRequest(port, 'POST', '/operativa/sensibilizacion', { 'x-access': CON_PERMISO },
+        { ...nueva, numeroSerie: 'V10-2', elementosEspacioPublico: [] });
+      const enviado = llamadas('POST', '/api/operativa/sensibilizacion')[0].body;
+      assert.deepEqual(enviado.elementosEspacioPublico, []);
+    });
+
+    test('POST: elementosEspacioPublico que no es lista: 422 sin llamar a SISDEP', async () => {
+      const { status, body } = await httpRequest(port, 'POST', '/operativa/sensibilizacion', { 'x-access': CON_PERMISO },
+        { ...nueva, elementosEspacioPublico: { codigo: 'avisos' } });
+      assert.equal(status, 422);
+      assert.equal(body.codigo, 'DATOS_INVALIDOS');
+      assert.equal(llamadas('POST', '/api/operativa/sensibilizacion').length, 0);
+    });
+
+    test('PATCH: reenvía el bloque cuando llega', async () => {
+      const { status } = await httpRequest(port, 'PATCH', '/operativa/sensibilizacion/100', { 'x-access': CON_PERMISO },
+        { observaciones: 'editada', elementosEspacioPublico: elementos });
+      assert.equal(status, 200);
+      const enviado = llamadas('PATCH', '/api/operativa/sensibilizacion/100')[0].body;
+      assert.deepEqual(enviado.elementosEspacioPublico, elementos);
+      assert.equal(enviado.observaciones, 'editada');
+    });
+
+    test('PATCH: sin la clave no se envía (SISDEP conserva el bloque)', async () => {
+      await httpRequest(port, 'PATCH', '/operativa/sensibilizacion/100', { 'x-access': CON_PERMISO }, { observaciones: 'sin bloque' });
+      const enviado = llamadas('PATCH', '/api/operativa/sensibilizacion/100')[0].body;
+      assert.equal(Object.prototype.hasOwnProperty.call(enviado, 'elementosEspacioPublico'), false);
+      assert.equal(enviado.observaciones, 'sin bloque');
+    });
+
+    test('detalle: el bloque viaja dentro de la sensibilización', async () => {
+      const { status, body } = await httpRequest(port, 'GET', '/operativa/sensibilizacion/100', { 'x-access': CON_PERMISO });
+      assert.equal(status, 200);
+      assert.equal(body.sensibilizacion.elementosEspacioPublico.length, 2);
+      assert.equal(body.sensibilizacion.elementosEspacioPublico[1].codigo, 'avisos');
+      assert.equal(body.sensibilizacion.elementosEspacioPublico[1].cual, 'Pendón');
+    });
+
+    test('ficha informal: reenvía y conserva las preguntas del bloque de elementos', async () => {
+      const crear = await httpRequest(port, 'POST', '/operativa/sensibilizacion/100/informal', { 'x-access': CON_PERMISO },
+        { cumpleClaseVenta: true, autoBazares: true, cantiBazares: false });
+      assert.equal(crear.status, 201);
+      const creada = llamadas('POST', '/api/operativa/sensibilizacionInformales')[0].body;
+      assert.equal(creada.autoBazares, true);
+      assert.equal(creada.cantiBazares, false);
+      assert.equal(creada.autoAvisosPublicitarios, false, 'lo no enviado sigue yendo en false');
+
+      const idFicha = crear.body.informal.id;
+      const editar = await httpRequest(port, 'PATCH', '/operativa/sensibilizacion/100/informal', { 'x-access': CON_PERMISO },
+        { autoMesasSillas: true });
+      assert.equal(editar.status, 200);
+      const enviada = llamadas('PATCH', `/api/operativa/sensibilizacionInformales/${idFicha}`)[0].body;
+      assert.equal(enviada.autoMesasSillas, true);
+      assert.equal(enviada.autoBazares, true, 'el PATCH conserva lo guardado de la ficha');
+      assert.equal(enviada.cumpleClaseVenta, true);
+    });
+
+    test('catálogos: activo y los textos v10 pasan sin cambios', async () => {
+      const { status, body } = await httpRequest(port, 'GET', '/dominios/actividadProhibida', { 'x-access': CON_PERMISO });
+      assert.equal(status, 200);
+      assert.equal(body.entities.actividadProhibida['3'].activo, false);
+      assert.equal(body.entities.actividadProhibida['14'].activo, true);
+      assert.equal(body.entities.actividadProhibida['14'].descripcion, 'Utiliza balizas, materas de cemento, canecas de cemento');
     });
   });
 });

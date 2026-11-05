@@ -1322,6 +1322,9 @@ app.get('/general/direccionCompleta/excel', asyncHandler(async (req: Request, re
 //     seguridad): SIVEP lo verifica con los permisos del grupo del usuario.
 //   - Se edita enviando el registro completo (actual + cambios), para que un
 //     PATCH parcial no deje en blanco campos que no se mandaron.
+//   - `elementosEspacioPublico` (acta FO-GGOL-018 v10) viaja anidado, como
+//     `datosVenta`: no es un campo de la fila y se reenvía aparte. Su ausencia
+//     deja el bloque guardado; `[]` lo borra.
 //   - No se exponen borrados ni el historial general de solicitudes.
 // ============================================================
 
@@ -1333,7 +1336,10 @@ const CAMPOS_SENSIBILIZACION = [
   'fechaRadicado', 'retiraElementosEspacioPublico', 'personaInformada', 'firmaQuienDiligencia',
   'nombreQuienLlena', 'documentoQuienLlena', 'numeroPeto', 'servicioPertenece', 'localizacion',
   'latitud', 'longitud', 'fotoProcedimiento', 'fotoActa', 'completo', 'idActividadProhibida',
-  'idSitioProhibido'
+  'idSitioProhibido',
+  // Cierre del acta FO-GGOL-018 v10 (los valida y normaliza SISDEP).
+  'balizasTipo', 'otraActividadProhibida', 'correoNotificacion', 'cargoQuienLlena',
+  'nombreTestigo', 'documentoTestigo'
 ];
 const CAMPOS_FORMAL = [
   'nombreEstablecimiento', 'cumpleActividadEconomica', 'autoAvisosPublicitarios',
@@ -1342,7 +1348,11 @@ const CAMPOS_FORMAL = [
 ];
 const CAMPOS_INFORMAL = [
   'cumpleClaseVenta', 'cumpleActividadEconomica', 'ocupacionAprovechamiento',
-  'aprovechamientoEconomico', 'actividadProhibida'
+  'aprovechamientoEconomico', 'actividadProhibida',
+  // Mismas preguntas del bloque de elementos que la ficha formal (SISDEP las
+  // agregó en V20261104.1). Siguen la regla de la ficha: lo no enviado va en false.
+  'autoAvisosPublicitarios', 'cantiAvisosPublicitarios', 'autoMesasSillas', 'cantiMesasSillas',
+  'autoJuegosMecanicos', 'cantiJuegosMecanicos', 'autoBazares', 'cantiBazares'
 ];
 const FILTROS_SENSIBILIZACION = [
   'idSectorInterno', 'idPersona', 'idTareaOperativa', 'idDatosVenta', 'numeroSerie', 'esNn',
@@ -1365,6 +1375,28 @@ function soloCampos(origen: any, campos: string[]): Record<string, any> {
 function clavesDescartadas(origen: any, permitidas: string[], excepto: string[] = []): string[] {
   if (!origen || typeof origen !== 'object') return [];
   return Object.keys(origen).filter((c) => !permitidas.includes(c) && !excepto.includes(c));
+}
+
+/**
+ * Claves que viajan anidadas dentro de la sensibilización y se reenvían por su
+ * propia vía, no como campos de la fila. `elementosEspacioPublico` es la tabla
+ * del acta v10 (una fila por elemento) y `datosVenta` el puesto de venta.
+ */
+const CLAVES_ANIDADAS_SENSIBILIZACION = ['datosVenta', 'elementosEspacioPublico'];
+
+/**
+ * Filas del bloque de elementos del espacio público, o `undefined` si la clave no
+ * llega. Una lista vacía es válida y significa "borrar las filas".
+ */
+function elementosEspacioPublico(origen: any): any[] | undefined {
+  return Array.isArray(origen?.elementosEspacioPublico) ? origen.elementosEspacioPublico : undefined;
+}
+
+/** La clave llegó con algo que no es una lista: SISDEP no puede deserializarla. */
+function elementosMalFormados(origen: any): boolean {
+  return !!origen
+    && Object.prototype.hasOwnProperty.call(origen, 'elementosEspacioPublico')
+    && !Array.isArray(origen.elementosEspacioPublico);
 }
 
 /**
@@ -1887,14 +1919,21 @@ app.post('/operativa/sensibilizacion', asyncHandler(async (req: Request, res: Re
   const authToken = requireToken(req, res);
   if (!authToken) return;
   const { userId } = reclamosDelToken(authToken);
-  // `datosVenta` (puesto de venta) se guarda aparte; esNn y territorio los calcula SISDEP.
-  const descartadas = clavesDescartadas(req.body, CAMPOS_SENSIBILIZACION, ['datosVenta', 'esNn', 'territorio']);
+  // `datosVenta` (puesto de venta) y `elementosEspacioPublico` (acta v10) se guardan
+  // aparte; esNn y territorio los calcula SISDEP.
+  const descartadas = clavesDescartadas(req.body, CAMPOS_SENSIBILIZACION, [...CLAVES_ANIDADAS_SENSIBILIZACION, 'esNn', 'territorio']);
   if (descartadas.length) {
     console.warn(`POST /operativa/sensibilizacion: claves descartadas del cuerpo: ${descartadas.join(', ')}`);
   }
   const puestoPedido = req.body?.datosVenta && typeof req.body.datosVenta === 'object' && !Array.isArray(req.body.datosVenta)
     ? req.body.datosVenta : null;
+  if (elementosMalFormados(req.body)) {
+    return datosInvalidos(res, 'El campo elementosEspacioPublico debe ser una lista');
+  }
+  const elementos = elementosEspacioPublico(req.body);
   const datos: Record<string, any> = { completo: false, ...soloCampos(req.body, CAMPOS_SENSIBILIZACION), idUsuario: userId };
+  // `[]` es una lista válida (deja el acta sin filas); solo se omite si no llega.
+  if (elementos) datos.elementosEspacioPublico = elementos;
   if (typeof datos.numeroSerie === 'string') datos.numeroSerie = datos.numeroSerie.trim();
   // Si no llega la geometría, se deriva en WKT a partir de lat/long (longitud primero).
   if ((datos.localizacion === undefined || datos.localizacion === null)
@@ -1951,7 +1990,7 @@ app.patch('/operativa/sensibilizacion/:id', asyncHandler(async (req: Request, re
     if (!actual) return res.status(404).json({ success: false, message: 'Sensibilización no encontrada' });
 
     // `motivo` no se pierde: se reenvía como motivo_cambio, por eso no se avisa.
-    const descartadas = clavesDescartadas(req.body, CAMPOS_SENSIBILIZACION, ['motivo', 'datosVenta', 'esNn', 'territorio']);
+    const descartadas = clavesDescartadas(req.body, CAMPOS_SENSIBILIZACION, [...CLAVES_ANIDADAS_SENSIBILIZACION, 'motivo', 'esNn', 'territorio']);
     if (descartadas.length) {
       console.warn(`PATCH /operativa/sensibilizacion/:id: claves descartadas del cuerpo: ${descartadas.join(', ')}`);
     }
@@ -1966,7 +2005,13 @@ app.patch('/operativa/sensibilizacion/:id', asyncHandler(async (req: Request, re
     if (typeof latitud === 'number' && typeof longitud === 'number') {
       base.localizacion = `POINT (${longitud} ${latitud})`;
     }
+    if (elementosMalFormados(req.body)) {
+      return datosInvalidos(res, 'El campo elementosEspacioPublico debe ser una lista');
+    }
+    // Sin la clave, SISDEP conserva el bloque guardado (el PATCH es parcial).
+    const elementos = elementosEspacioPublico(req.body);
     const datos: Record<string, any> = { ...base, ...cambios, id: Number(id), idUsuario: actual.idUsuario };
+    if (elementos) datos.elementosEspacioPublico = elementos;
     if (typeof datos.numeroSerie === 'string') datos.numeroSerie = datos.numeroSerie.trim();
     const invalido = validarSensibilizacion(datos);
     if (invalido) return res.status(422).json({ success: false, codigo: 'DATOS_INVALIDOS', message: invalido });
