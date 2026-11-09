@@ -286,6 +286,11 @@ app.get('/', (req: Request, res: Response) => {
       },
       {
         method: "GET",
+        path: "/archivos/evidencias-oferta/:idOferta/:filename",
+        description: "Descarga una evidencia de oferta institucional (carpeta anidada por idOferta). Requiere token. Stream passthrough."
+      },
+      {
+        method: "GET",
         path: "/dominios/{municipio|comuna|barrio|nomenclaturaVial|orientacion}",
         description: "Catálogos maestros usados para construir direcciones. Proxy a SISDEP."
       },
@@ -308,6 +313,36 @@ app.get('/', (req: Request, res: Response) => {
         method: "GET",
         path: "/regulaciones/autorizacion",
         description: "Busca autorizaciones (con datos del ventero) por radicado mercurio. Filtros por query params: ?radicadoMercurio= (exacto), ?contains= (parcial), ?documento=, ?fechaInicial__gte=. Proxy a la vista SolicitudAutorizacionReporte de SISDEP."
+      },
+      {
+        method: "GET|POST|PATCH|DELETE",
+        path: "/social/oferta[/:id]",
+        description: "Oferta institucional FO-GGOL-015 v5: lista (también /paginated), detalle, alta, edición y borrado. Incluye GET /prellenado/:idVentero. Proxy a SISDEP (módulos solo_lectura/social_ofertas y social_registro_ventero en el prellenado)."
+      },
+      {
+        method: "GET|POST|PATCH|DELETE",
+        path: "/social/necesidad[/:id]",
+        description: "Necesidad asociada a la oferta institucional: lista (también /paginated), detalle, alta, edición y borrado. Proxy a SISDEP (módulo personas)."
+      },
+      {
+        method: "GET|POST|PATCH|DELETE",
+        path: "/social/participanteOferta[/:id]",
+        description: "Participante y seguimiento de la oferta institucional: lista (también /paginated), detalle, alta, edición y borrado. Proxy a SISDEP."
+      },
+      {
+        method: "GET|POST",
+        path: "/social/evidenciasOferta[/:id]",
+        description: "Evidencias de la oferta institucional: lista (también /paginated), detalle y alta multipart (parte 'info' + archivo). Sin edición ni borrado: SISDEP las rechaza."
+      },
+      {
+        method: "GET",
+        path: "/dominios/{tipoOferta|tipoNecesidad|tipoConocimiento|tipoEvidencia|nacionalidad|parentesco|ocupacion|escolaridad|estadoCivil|sexo|tipoDocumento|programaOEntidad|remisionOferta}",
+        description: "Catálogos del formulario de oferta institucional. Proxy a SISDEP."
+      },
+      {
+        method: "POST",
+        path: "/social/reportes/reporteOfertasInstitucionalesIndex/excel",
+        description: "Reporte Excel de ofertas institucionales (body JSON con los ids). Reenvía content-type y content-disposition. Stream passthrough."
       }
     ]
   });
@@ -832,6 +867,16 @@ function requireNumericId(req: Request, res: Response): string | null {
   return id;
 }
 
+/** Igual que requireNumericId, para un param de ruta con otro nombre. */
+function requireNumericParam(req: Request, res: Response, nombre: string): string | null {
+  const valor = String(req.params[nombre] ?? '');
+  if (!/^\d+$/.test(valor)) {
+    res.status(400).json({ success: false, message: `${nombre} inválido: debe ser numérico` });
+    return null;
+  }
+  return valor;
+}
+
 // --- Dominio: tipoReporteSivep ---
 
 app.get('/dominios/tipoReporteSivep', asyncHandler(async (req: Request, res: Response) => {
@@ -1072,6 +1117,60 @@ app.post('/archivos', asyncHandler(async (req: Request, res: Response) => {
     res.status(upstream.status).json(upstream.data);
   } catch (error: any) {
     handleProxyError(error, res, 'POST /api/archivos');
+  }
+}));
+
+// GET: descarga de las evidencias de oferta. SISDEP las guarda en
+// evidencias-oferta/<idOferta>/<timestamp>.<ext> y las sirve con la ruta con comodín
+// /api/archivos/evidencias-oferta/*file (permiso social_ofertas, sin registrar el
+// documento en sisdep_anexos). Esa ruta anidada no cabe en /archivos/:folder/:filename,
+// así que se reenvía con su propio handler, antes de la ruta genérica.
+app.get('/archivos/evidencias-oferta/:idOferta/:filename', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+
+  const idOferta = requireNumericParam(req, res, 'idOferta');
+  if (!idOferta) return;
+  const filename = String(req.params.filename ?? '');
+  // Defensa básica contra path traversal — Express ya decodifica %2F.
+  if (/[\\/]/.test(filename) || filename.includes('..')) {
+    return res.status(400).json({ success: false, message: 'Ruta inválida' });
+  }
+
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/archivos/evidencias-oferta/${idOferta}/${encodeURIComponent(filename)}`,
+      {
+        headers: {
+          'x-access': Array.isArray(authToken) ? authToken[0] : authToken
+        },
+        responseType: 'stream',
+        timeout: 30000,
+        validateStatus: () => true
+      }
+    );
+
+    // Si el upstream devolvió error como JSON, propagar status + body legible.
+    if (upstream.status >= 400) {
+      let body = '';
+      for await (const chunk of upstream.data) body += chunk.toString();
+      let parsed: any = { message: body || 'Error en el servidor remoto' };
+      try { parsed = JSON.parse(body); } catch { /* mantener texto */ }
+      return res.status(upstream.status).json({
+        success: false,
+        message: mensajeSisdep(parsed, 'Error en el servidor remoto'),
+        ...marcaSesionVencida(upstream.status)
+      });
+    }
+
+    if (upstream.headers['content-type']) res.set('Content-Type', upstream.headers['content-type'] as string);
+    if (upstream.headers['content-length']) res.set('Content-Length', upstream.headers['content-length'] as string);
+    if (upstream.headers['cache-control']) res.set('Cache-Control', upstream.headers['cache-control'] as string);
+    res.status(upstream.status);
+    upstream.data.on('error', () => res.destroy());
+    upstream.data.pipe(res);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/archivos/evidencias-oferta/:idOferta/:filename');
   }
 }));
 
@@ -2397,6 +2496,455 @@ app.get('/archivos/:id', asyncHandler(async (req: Request, res: Response) => {
     res.status(r.status).json(r.data);
   } catch (error: any) {
     handleProxyError(error, res, 'GET /api/archivos/:id');
+  }
+}));
+
+// ============================================================
+// Ofertas institucionales (FO-GGOL-015 v5) — proxy a SISDEP
+// Recursos: /api/social/oferta, /api/social/necesidad,
+//           /api/social/participanteOferta, /api/social/evidenciasOferta
+// Los payloads y las respuestas se reenvían tal cual; los permisos
+// (social_ofertas, personas y social_registro_ventero en el prellenado)
+// los aplica SISDEP con el token del usuario.
+// ============================================================
+
+// IMPORTANTE: /paginated y /prellenado deben registrarse antes que /:id para que
+// Express no capture "paginated" ni "prellenado" como id dinámico.
+
+// --- Oferta ---
+
+app.get('/social/oferta/paginated', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/social/oferta/paginated`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/social/oferta/paginated');
+  }
+}));
+
+// Prellenado del formulario: ventero, persona, dirección, integrantes, autorización y estudio.
+app.get('/social/oferta/prellenado/:idVentero', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const idVentero = requireNumericParam(req, res, 'idVentero');
+  if (!idVentero) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/social/oferta/prellenado/${idVentero}`,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/social/oferta/prellenado/:idVentero');
+  }
+}));
+
+app.get('/social/oferta', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/social/oferta`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/social/oferta');
+  }
+}));
+
+app.get('/social/oferta/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/social/oferta/${id}`,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/social/oferta/:id');
+  }
+}));
+
+app.post('/social/oferta', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.post(
+      `${sisdepBaseUrl}/api/social/oferta`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'POST /api/social/oferta');
+  }
+}));
+
+app.patch('/social/oferta/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.patch(
+      `${sisdepBaseUrl}/api/social/oferta/${id}`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'PATCH /api/social/oferta/:id');
+  }
+}));
+
+app.delete('/social/oferta/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.delete(
+      `${sisdepBaseUrl}/api/social/oferta/${id}`,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data ?? { success: true });
+  } catch (error: any) {
+    handleProxyError(error, res, 'DELETE /api/social/oferta/:id');
+  }
+}));
+
+// --- Necesidad (la crea el formulario antes de la oferta) ---
+
+app.get('/social/necesidad/paginated', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/social/necesidad/paginated`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/social/necesidad/paginated');
+  }
+}));
+
+app.get('/social/necesidad', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/social/necesidad`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/social/necesidad');
+  }
+}));
+
+app.get('/social/necesidad/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/social/necesidad/${id}`,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/social/necesidad/:id');
+  }
+}));
+
+app.post('/social/necesidad', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.post(
+      `${sisdepBaseUrl}/api/social/necesidad`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'POST /api/social/necesidad');
+  }
+}));
+
+app.patch('/social/necesidad/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.patch(
+      `${sisdepBaseUrl}/api/social/necesidad/${id}`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'PATCH /api/social/necesidad/:id');
+  }
+}));
+
+app.delete('/social/necesidad/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.delete(
+      `${sisdepBaseUrl}/api/social/necesidad/${id}`,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data ?? { success: true });
+  } catch (error: any) {
+    handleProxyError(error, res, 'DELETE /api/social/necesidad/:id');
+  }
+}));
+
+// --- Participante de la oferta (verificación y seguimiento) ---
+
+app.get('/social/participanteOferta/paginated', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/social/participanteOferta/paginated`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/social/participanteOferta/paginated');
+  }
+}));
+
+app.get('/social/participanteOferta', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/social/participanteOferta`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/social/participanteOferta');
+  }
+}));
+
+app.get('/social/participanteOferta/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/social/participanteOferta/${id}`,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/social/participanteOferta/:id');
+  }
+}));
+
+app.post('/social/participanteOferta', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.post(
+      `${sisdepBaseUrl}/api/social/participanteOferta`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'POST /api/social/participanteOferta');
+  }
+}));
+
+app.patch('/social/participanteOferta/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.patch(
+      `${sisdepBaseUrl}/api/social/participanteOferta/${id}`,
+      req.body,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'PATCH /api/social/participanteOferta/:id');
+  }
+}));
+
+app.delete('/social/participanteOferta/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.delete(
+      `${sisdepBaseUrl}/api/social/participanteOferta/${id}`,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data ?? { success: true });
+  } catch (error: any) {
+    handleProxyError(error, res, 'DELETE /api/social/participanteOferta/:id');
+  }
+}));
+
+// --- Evidencias de la oferta (solo lectura y alta: SISDEP rechaza PATCH y DELETE) ---
+
+app.get('/social/evidenciasOferta/paginated', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/social/evidenciasOferta/paginated`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/social/evidenciasOferta/paginated');
+  }
+}));
+
+app.get('/social/evidenciasOferta', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/social/evidenciasOferta`,
+      buildAxiosConfig(authToken, req.query)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/social/evidenciasOferta');
+  }
+}));
+
+app.get('/social/evidenciasOferta/:id', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  const id = requireNumericId(req, res);
+  if (!id) return;
+  try {
+    const upstream = await axios.get(
+      `${sisdepBaseUrl}/api/social/evidenciasOferta/${id}`,
+      buildAxiosConfig(authToken)
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'GET /api/social/evidenciasOferta/:id');
+  }
+}));
+
+// POST: passthrough del stream multipart (parte "info" en JSON + el archivo de la evidencia).
+// NO usar express.json — el body llega como stream binario multipart/form-data.
+app.post('/social/evidenciasOferta', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+
+  const contentType = req.headers['content-type'];
+  if (!contentType || !contentType.startsWith('multipart/form-data')) {
+    return res.status(400).json({
+      success: false,
+      message: 'Content-Type debe ser multipart/form-data (parte info + archivo)'
+    });
+  }
+
+  try {
+    const upstream = await axios.post(
+      `${sisdepBaseUrl}/api/social/evidenciasOferta`,
+      req,
+      {
+        headers: {
+          'x-access': Array.isArray(authToken) ? authToken[0] : authToken,
+          'content-type': contentType,
+          ...(req.headers['content-length'] ? { 'content-length': req.headers['content-length'] } : {})
+        },
+        maxBodyLength: 50 * 1024 * 1024,
+        maxContentLength: 50 * 1024 * 1024,
+        timeout: 60000
+      }
+    );
+    res.status(upstream.status).json(upstream.data);
+  } catch (error: any) {
+    handleProxyError(error, res, 'POST /api/social/evidenciasOferta');
+  }
+}));
+
+// --- Catálogos del formulario ---
+app.get('/dominios/tipoOferta', proxyGetCatalogo('/api/dominios/tipoOferta'));
+app.get('/dominios/tipoNecesidad', proxyGetCatalogo('/api/dominios/tipoNecesidad'));
+app.get('/dominios/tipoConocimiento', proxyGetCatalogo('/api/dominios/tipoConocimiento'));
+app.get('/dominios/tipoEvidencia', proxyGetCatalogo('/api/dominios/tipoEvidencia'));
+app.get('/dominios/nacionalidad', proxyGetCatalogo('/api/dominios/nacionalidad'));
+app.get('/dominios/parentesco', proxyGetCatalogo('/api/dominios/parentesco'));
+app.get('/dominios/ocupacion', proxyGetCatalogo('/api/dominios/ocupacion'));
+app.get('/dominios/escolaridad', proxyGetCatalogo('/api/dominios/escolaridad'));
+app.get('/dominios/estadoCivil', proxyGetCatalogo('/api/dominios/estadoCivil'));
+app.get('/dominios/sexo', proxyGetCatalogo('/api/dominios/sexo'));
+app.get('/dominios/tipoDocumento', proxyGetCatalogo('/api/dominios/tipoDocumento'));
+app.get('/dominios/programaOEntidad', proxyGetCatalogo('/api/dominios/programaOEntidad'));
+app.get('/dominios/remisionOferta', proxyGetCatalogo('/api/dominios/remisionOferta'));
+
+// --- Reporte Excel de ofertas (SISDEP exige los ids en el body) ---
+app.post('/social/reportes/reporteOfertasInstitucionalesIndex/excel', asyncHandler(async (req: Request, res: Response) => {
+  const authToken = requireToken(req, res);
+  if (!authToken) return;
+  try {
+    const upstream = await axios.post(
+      `${sisdepBaseUrl}/api/social/reportes/reporteOfertasInstitucionalesIndex/excel`,
+      req.body,
+      {
+        headers: {
+          'x-access': Array.isArray(authToken) ? authToken[0] : authToken,
+          'Content-Type': 'application/json'
+        },
+        responseType: 'stream',
+        timeout: 60000,
+        validateStatus: () => true
+      }
+    );
+
+    if (upstream.status >= 400) {
+      let body = '';
+      for await (const chunk of upstream.data) body += chunk.toString();
+      let parsed: any = { message: body || 'Error en el servidor remoto' };
+      try { parsed = JSON.parse(body); } catch { /* texto plano */ }
+      return res.status(upstream.status).json({
+        success: false,
+        message: mensajeSisdep(parsed, 'Error en el servidor remoto'),
+        ...marcaSesionVencida(upstream.status)
+      });
+    }
+
+    if (upstream.headers['content-type']) res.set('Content-Type', upstream.headers['content-type'] as string);
+    if (upstream.headers['content-length']) res.set('Content-Length', upstream.headers['content-length'] as string);
+    if (upstream.headers['content-disposition']) res.set('Content-Disposition', upstream.headers['content-disposition'] as string);
+    res.status(upstream.status);
+    upstream.data.on('error', () => res.destroy());
+    upstream.data.pipe(res);
+  } catch (error: any) {
+    handleProxyError(error, res, 'POST /api/social/reportes/reporteOfertasInstitucionalesIndex/excel');
   }
 }));
 
