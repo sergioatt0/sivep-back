@@ -62,6 +62,16 @@ Una vez corriendo, `GET http://localhost:5001/` devuelve la lista de endpoints:
 | GET    | `/api/proxy-image?url=...`          | **Sí**            | Proxy de imágenes del dominio `medellin.gov.co`.          |
 | GET/POST/PATCH/DELETE | `/operativa/reconocimientoIncautacion[/:id]` | **Sí** | CRUD de reconocimientos de incautación (lista, `/paginated`, detalle, alta, edición, borrado). Ver `docs-md/incautaciones-endpoint.md`. |
 | GET/POST/PATCH/DELETE | `/operativa/actaInventario[/:id]`   | **Sí**            | Acta de inventario: lista, `/paginated`, `/stream`, detalle, alta y edición multipart (`info` + archivo). Ver `docs-md/incautaciones-endpoint.md`. |
+| GET/POST/PATCH/DELETE | `/social/oferta[/:id]` | **Sí** | Oferta institucional FO-GGOL-015 v5: lista, `/paginated`, detalle, alta, edición y borrado, más `GET /social/oferta/prellenado/:idVentero`. Ver `docs-md/ofertas-institucionales-endpoint.md`. |
+| GET/POST/PATCH/DELETE | `/social/necesidad[/:id]` | **Sí** | Necesidad que el formulario crea antes de la oferta: lista, `/paginated`, detalle, alta, edición y borrado. En SISDEP la autoriza el módulo `personas`. |
+| GET/POST/PATCH/DELETE | `/social/participanteOferta[/:id]` | **Sí** | Participante y seguimiento de la oferta: lista, `/paginated`, detalle, alta, edición y borrado. |
+| GET/POST | `/social/evidenciasOferta[/:id]` | **Sí** | Evidencias de la oferta: lista, `/paginated`, detalle y alta multipart (parte `info` + archivo). Sin `PATCH` ni `DELETE`: SISDEP los rechaza. |
+| GET | `/archivos/evidencias-oferta/:idOferta/:filename` | **Sí** | Descarga autenticada de una evidencia (carpeta anidada por oferta). Stream passthrough. |
+| GET | `/dominios/{tipoOferta,tipoNecesidad,tipoConocimiento,tipoEvidencia,nacionalidad,parentesco,ocupacion,escolaridad,estadoCivil,sexo,tipoDocumento,programaOEntidad,remisionOferta}` | **Sí** | Catálogos del formulario de oferta institucional. |
+| POST | `/social/reportes/reporteOfertasInstitucionalesIndex/excel` | **Sí** | Reporte Excel de ofertas institucionales. Body JSON con `ids` explícitos; devuelve el xlsx con `content-type` y `content-disposition`. |
+
+Documentación por dominio: `docs-md/incautaciones-endpoint.md`,
+`docs-md/ventero-expediente-endpoint.md` y `docs-md/ofertas-institucionales-endpoint.md`.
 
 ### Smoke test
 
